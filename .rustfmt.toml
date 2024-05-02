@@ -1,0 +1,5 @@
+# rustfmt is only used here to format imports, see reasoning in bevy_mod_physx
+imports_granularity = "Module"
+#imports_layout = "HorizontalVertical"
+group_imports = "StdExternalCrate"
+reorder_modules = true
