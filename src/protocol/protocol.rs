@@ -290,14 +290,19 @@ pub struct Refresh {
 #[serde(default, rename_all = "camelCase")]
 pub struct ConnectRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub token: String,
     #[prost(bytes = "vec", tag = "2")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "3")]
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub subs: std::collections::HashMap<String, SubscribeRequest>,
     #[prost(string, tag = "4")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     #[prost(string, tag = "5")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,
 }
 
@@ -429,6 +434,7 @@ pub struct PublishRequest {
     #[prost(string, tag = "1")]
     pub channel: String,
     #[prost(bytes = "vec", tag = "2")]
+    #[serde(serialize_with = "super::serialize_tojson")]
     pub data: Vec<u8>,
 }
 

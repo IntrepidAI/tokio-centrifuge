@@ -26,12 +26,13 @@ pub enum ReplyError {
 #[allow(clippy::option_map_unit_fn)]
 #[allow(clippy::type_complexity)]
 pub async fn websocket_handler(
+    rt: tokio::runtime::Handle,
     stream: WebSocketStream<ConnectStream>,
     mut control_ch: mpsc::Receiver<(Command, oneshot::Sender<Result<Reply, ReplyError>>, Duration)>,
-    mut closer_ch: mpsc::Receiver<()>,
+    mut closer_ch: mpsc::Receiver<bool>,
     on_push: impl Fn(Reply) + Send + Sync + 'static,
     on_error: impl Fn(anyhow::Error) + Send + Sync + 'static,
-) {
+) -> bool {
     struct ReplyMap<T> {
         id: AtomicU32,
         map: Mutex<HashMap<u32, (oneshot::Sender<T>, Option<AbortHandle>)>>,
@@ -47,14 +48,13 @@ pub async fn websocket_handler(
 
     let on_error = on_error_arc.clone();
     let reply_map = reply_map_arc.clone();
-    let reader_task = tokio::spawn(async move {
-        'outer: loop {
+    let reader_task = rt.spawn(async move {
+        let do_reconnect = 'outer: loop {
             tokio::select! {
                 biased;
 
-                _ = closer_ch.recv() => {
-                    log::debug!("connection interrupted by user");
-                    break 'outer;
+                do_reconnect = closer_ch.recv() => {
+                    break 'outer do_reconnect.unwrap_or(false);
                 }
 
                 remote_msg = read_ws.next() => {
@@ -63,14 +63,25 @@ pub async fn websocket_handler(
                         Some(Err(err)) => {
                             log::debug!("failed to read message: {}", err);
                             on_error(anyhow!(err));
-                            break 'outer;
+                            break 'outer true;
                         }
-                        None => break 'outer,
+                        None => break 'outer true,
                     };
 
                     let data = match message {
                         Message::Text(text) => text.into_bytes(),
                         Message::Binary(bin) => bin,
+                        Message::Close(close_frame) => {
+                            if let Some(close_frame) = close_frame {
+                                let code: u16 = close_frame.code.into();
+                                let reason = close_frame.reason;
+                                #[allow(clippy::manual_range_contains)]
+                                let reconnect = code < 3500 || code >= 5000 || (code >= 4000 && code < 4500);
+                                log::debug!("connection closed by remote, code={code}, reason={reason}");
+                                break 'outer reconnect;
+                            }
+                            break 'outer true;
+                        }
                         _ => continue 'outer,
                     };
 
@@ -83,6 +94,8 @@ pub async fn websocket_handler(
                                 continue;
                             }
                         };
+
+                        println!("<-- {}", line);
 
                         let result = (|| -> Result<(Reply, u32), anyhow::Error> {
                             let frame: RawReply = serde_json::from_str(&line)?;
@@ -121,24 +134,23 @@ pub async fn websocket_handler(
                     }
                 }
             }
-        }
+        };
 
         drop(ping_write);
-        read_ws
+        (read_ws, do_reconnect)
     });
 
     let on_error = on_error_arc;
     let reply_map = reply_map_arc.clone();
-    let writer_task = tokio::spawn(async move {
+    let writer_task = rt.spawn(async move {
         'outer: loop {
             tokio::select! {
                 biased;
 
                 ping = ping_read.recv() => {
-dbg!("ping!");
                     if ping.is_some() {
-                        let command = RawCommand::default();
-                        let message = Message::Text(serde_json::to_string(&command).unwrap());
+                        let message = Message::Text("{}".to_string());
+                        println!("--> {}", message.to_text().unwrap());
                         match write_ws.send(message).await {
                             Ok(()) => (),
                             Err(err) => {
@@ -157,6 +169,11 @@ dbg!("ping!");
                         None => break 'outer,
                     };
 
+                    if timeout == Duration::ZERO {
+                        let _ = reply_ch.send(Err(ReplyError::Timeout(timeout)));
+                        continue 'outer;
+                    }
+
                     let id = loop {
                         let id = reply_map.id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if id != 0 {
@@ -165,7 +182,7 @@ dbg!("ping!");
                     };
 
                     let abort_handle = {
-                        if timeout.is_zero() {
+                        if timeout == Duration::MAX {
                             None
                         } else {
                             let reply_map = reply_map.clone();
@@ -187,6 +204,7 @@ dbg!("ping!");
                     let mut command = RawCommand::from(data);
                     command.id = id;
                     let message = Message::Text(serde_json::to_string(&command).unwrap());
+                    println!("--> {}", message.to_text().unwrap());
 
                     match write_ws.send(message).await {
                         Ok(()) => (),
@@ -212,9 +230,14 @@ dbg!("ping!");
         }
     }
 
-    if let (Ok(read_ws), Ok(write_ws)) = (read_ws, write_ws) {
+    if let (Ok((read_ws, reconnect)), Ok(write_ws)) = (read_ws, write_ws) {
         let mut stream = read_ws.reunite(write_ws).unwrap();
         let _ = stream.close(None).await;
-        log::debug!("websocket connection closed");
+        log::debug!("websocket connection closed, reconnect={}", reconnect);
+        reconnect
+    } else {
+        let reconnect = true;
+        log::debug!("websocket connection aborted, reconnect={}", reconnect);
+        reconnect
     }
 }

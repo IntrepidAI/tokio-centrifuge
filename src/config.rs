@@ -3,10 +3,27 @@ use std::time::Duration;
 
 use tokio::runtime::Handle;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
-	pub(crate) runtime: Option<Handle>,
-	pub(crate) reconnect_strategy: Option<Arc<dyn ReconnectStrategy>>,
+	pub token: String,
+	pub name: String,
+	pub version: String,
+	pub runtime: Option<Handle>,
+	pub read_timeout: Duration,
+	pub reconnect_strategy: Arc<dyn ReconnectStrategy>,
+}
+
+impl Default for Config {
+	fn default() -> Self {
+		Config {
+			token: String::new(),
+			name: String::from(env!("CARGO_PKG_NAME")),
+			version: String::new(),
+			runtime: None,
+			read_timeout: Duration::from_secs(5),
+			reconnect_strategy: Arc::new(BackoffReconnect::default()),
+		}
+	}
 }
 
 impl Config {
@@ -14,8 +31,33 @@ impl Config {
 		Self::default()
 	}
 
-	pub fn runtime(mut self, runtime: tokio::runtime::Handle) -> Self {
+	pub fn with_token(mut self, token: impl Into<String>) -> Self {
+		self.token = token.into();
+		self
+	}
+
+	pub fn with_name(mut self, name: impl Into<String>) -> Self {
+		self.name = name.into();
+		self
+	}
+
+	pub fn with_version(mut self, version: impl Into<String>) -> Self {
+		self.version = version.into();
+		self
+	}
+
+	pub fn with_runtime(mut self, runtime: tokio::runtime::Handle) -> Self {
 		self.runtime = Some(runtime);
+		self
+	}
+
+	pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
+		self.read_timeout = timeout;
+		self
+	}
+
+	pub fn with_reconnect_strategy(mut self, strategy: impl ReconnectStrategy) -> Self {
+		self.reconnect_strategy = Arc::new(strategy);
 		self
 	}
 }

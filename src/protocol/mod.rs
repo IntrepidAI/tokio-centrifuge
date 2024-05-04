@@ -2,6 +2,7 @@
 mod protocol;
 
 pub use protocol::*;
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -288,4 +289,9 @@ impl From<RawPush> for Push {
             data,
         }
     }
+}
+
+fn serialize_tojson<T: AsRef<[u8]>, S: Serializer>(v: &T, serializer: S) -> Result<S::Ok, S::Error> {
+    let value: serde_json::Value = serde_json::from_slice(v.as_ref()).map_err(serde::ser::Error::custom)?;
+    value.serialize(serializer)
 }
