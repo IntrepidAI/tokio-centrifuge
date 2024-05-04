@@ -395,6 +395,8 @@ impl CentrifugeInner {
     }
 }
 
+// this is a regular future which you can poll to get result,
+// but it's totally fine to drop it if you don't need results
 pub struct FutureResult<T>(T);
 
 impl<T, R> IntoFuture for FutureResult<T>

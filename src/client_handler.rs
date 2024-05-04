@@ -75,8 +75,7 @@ pub async fn websocket_handler(
                             if let Some(close_frame) = close_frame {
                                 let code: u16 = close_frame.code.into();
                                 let reason = close_frame.reason;
-                                #[allow(clippy::manual_range_contains)]
-                                let reconnect = code < 3500 || code >= 5000 || (code >= 4000 && code < 4500);
+                                let reconnect = !matches!(code, 3500..=3999 | 4500..=4999);
                                 log::debug!("connection closed by remote, code={code}, reason={reason}");
                                 break 'outer reconnect;
                             }
@@ -95,7 +94,7 @@ pub async fn websocket_handler(
                             }
                         };
 
-                        println!("<-- {}", line);
+                        log::trace!("<-- {}", line);
 
                         let result = (|| -> Result<(Reply, u32), anyhow::Error> {
                             let frame: RawReply = serde_json::from_str(&line)?;
@@ -143,6 +142,9 @@ pub async fn websocket_handler(
     let on_error = on_error_arc;
     let reply_map = reply_map_arc.clone();
     let writer_task = rt.spawn(async move {
+        let mut batch = Vec::new();
+        let mut lines = Vec::new();
+
         'outer: loop {
             tokio::select! {
                 biased;
@@ -150,7 +152,7 @@ pub async fn websocket_handler(
                 ping = ping_read.recv() => {
                     if ping.is_some() {
                         let message = Message::Text("{}".to_string());
-                        println!("--> {}", message.to_text().unwrap());
+                        log::trace!("--> {}", message.to_text().unwrap());
                         match write_ws.send(message).await {
                             Ok(()) => (),
                             Err(err) => {
@@ -163,54 +165,63 @@ pub async fn websocket_handler(
                     }
                 }
 
-                control_msg = control_ch.recv() => {
-                    let (data, reply_ch, timeout) = match control_msg {
-                        Some(data) => data,
-                        None => break 'outer,
-                    };
-
-                    if timeout == Duration::ZERO {
-                        let _ = reply_ch.send(Err(ReplyError::Timeout(timeout)));
-                        continue 'outer;
+                control_msgs = control_ch.recv_many(&mut batch, 32) => {
+                    if control_msgs == 0 {
+                        break 'outer;
                     }
 
-                    let id = loop {
-                        let id = reply_map.id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if id != 0 {
-                            break id;
-                        }
-                    };
+                    for control_msg in batch.drain(..) {
+                        let (data, reply_ch, timeout) = control_msg;
 
-                    let abort_handle = {
-                        if timeout == Duration::MAX {
-                            None
-                        } else {
-                            let reply_map = reply_map.clone();
-                            Some(tokio::spawn(async move {
-                                tokio::time::sleep(timeout).await;
-                                let mut map = reply_map.map.lock().unwrap();
-                                if let Some((ch, _)) = map.remove(&id) {
-                                    let _ = ch.send(Err(ReplyError::Timeout(timeout)));
-                                }
-                            }).abort_handle())
+                        if timeout == Duration::ZERO {
+                            let _ = reply_ch.send(Err(ReplyError::Timeout(timeout)));
+                            continue 'outer;
                         }
-                    };
 
-                    {
-                        let mut map = reply_map.map.lock().unwrap();
-                        map.insert(id, (reply_ch, abort_handle));
+                        let id = loop {
+                            let id = reply_map.id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if id != 0 {
+                                break id;
+                            }
+                        };
+
+                        let abort_handle = {
+                            if timeout == Duration::MAX {
+                                None
+                            } else {
+                                let reply_map = reply_map.clone();
+                                Some(tokio::spawn(async move {
+                                    tokio::time::sleep(timeout).await;
+                                    let mut map = reply_map.map.lock().unwrap();
+                                    if let Some((ch, _)) = map.remove(&id) {
+                                        let _ = ch.send(Err(ReplyError::Timeout(timeout)));
+                                    }
+                                }).abort_handle())
+                            }
+                        };
+
+                        {
+                            let mut map = reply_map.map.lock().unwrap();
+                            map.insert(id, (reply_ch, abort_handle));
+                        }
+
+                        let mut command = RawCommand::from(data);
+                        command.id = id;
+                        let message = serde_json::to_string(&command).unwrap();
+                        log::trace!("--> {}", &message);
+                        lines.push(message);
                     }
 
-                    let mut command = RawCommand::from(data);
-                    command.id = id;
-                    let message = Message::Text(serde_json::to_string(&command).unwrap());
-                    println!("--> {}", message.to_text().unwrap());
+                    if !lines.is_empty() {
+                        let message = Message::Text(lines.join("\n"));
+                        lines.clear();
 
-                    match write_ws.send(message).await {
-                        Ok(()) => (),
-                        Err(err) => {
-                            on_error(anyhow!(err));
-                            break 'outer;
+                        match write_ws.send(message).await {
+                            Ok(()) => (),
+                            Err(err) => {
+                                on_error(anyhow!(err));
+                                break 'outer;
+                            }
                         }
                     }
                 }
