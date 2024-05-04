@@ -3,11 +3,18 @@ use std::time::Duration;
 
 use tokio::runtime::Handle;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+	Json,
+	Protobuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
 	pub token: String,
 	pub name: String,
 	pub version: String,
+	pub protocol: Protocol,
 	pub runtime: Option<Handle>,
 	pub read_timeout: Duration,
 	pub reconnect_strategy: Arc<dyn ReconnectStrategy>,
@@ -19,6 +26,7 @@ impl Default for Config {
 			token: String::new(),
 			name: String::from(env!("CARGO_PKG_NAME")),
 			version: String::new(),
+			protocol: Protocol::Json,
 			runtime: None,
 			read_timeout: Duration::from_secs(5),
 			reconnect_strategy: Arc::new(BackoffReconnect::default()),
@@ -58,6 +66,16 @@ impl Config {
 
 	pub fn with_reconnect_strategy(mut self, strategy: impl ReconnectStrategy) -> Self {
 		self.reconnect_strategy = Arc::new(strategy);
+		self
+	}
+
+	pub fn use_json(mut self) -> Self {
+		self.protocol = Protocol::Json;
+		self
+	}
+
+	pub fn use_protobuf(mut self) -> Self {
+		self.protocol = Protocol::Protobuf;
 		self
 	}
 }

@@ -31,6 +31,7 @@ pub struct EmulationRequest {
 pub struct RawCommand {
     /// Id of command to let client match replies to commands.
     #[prost(uint32, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub id: u32,
     /// ProtocolVersion2 client can send one of the following requests. Server will
     /// only take the first non-null request out of these and may return an error if

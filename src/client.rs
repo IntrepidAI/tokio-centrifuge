@@ -11,7 +11,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client_handler::ReplyError;
-use crate::config::{Config, ReconnectStrategy};
+use crate::config::{Config, Protocol, ReconnectStrategy};
 use crate::protocol::{Command, ConnectRequest, PublishRequest, Reply};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,7 @@ struct CentrifugeInner {
     token: String,
     name: String,
     version: String,
+    protocol: Protocol,
     reconnect_strategy: Arc<dyn ReconnectStrategy>,
     read_timeout: Duration,
     closer_write: Option<mpsc::Sender<bool>>,
@@ -166,7 +167,7 @@ impl CentrifugeInner {
     ), bool>> + '_ {
         let (control_write, control_read) = mpsc::channel(32);
 
-        let (rt, connect_rx) = {
+        let (rt, connect_rx, protocol) = {
             let inner = client.lock().unwrap();
             //inner.control_write = Some(control_write);
 
@@ -184,7 +185,7 @@ impl CentrifugeInner {
             control_write.try_send((command, connect_tx, timeout)).unwrap();
 
             let rt = inner.rt.clone();
-            (rt, connect_rx)
+            (rt, connect_rx, inner.protocol)
         };
 
         async move {
@@ -192,14 +193,16 @@ impl CentrifugeInner {
             // Spawn tokio task to handle reads and writes to websocket
             //
             let client1 = client.clone();
-            let mut handler_future: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(crate::client_handler::websocket_handler(rt, stream, control_read, closer_read, |_push| {
-                // dbg!(push);
-            }, move |err| {
-                let mut inner = client1.lock().unwrap();
-                if let Some(ref mut on_error) = inner.on_error {
-                    on_error(err);
-                }
-            }));
+            let mut handler_future: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(
+                crate::client_handler::websocket_handler(rt, stream, control_read, closer_read, protocol, |_push| {
+                    // dbg!(push);
+                }, move |err| {
+                    let mut inner = client1.lock().unwrap();
+                    if let Some(ref mut on_error) = inner.on_error {
+                        on_error(err);
+                    }
+                })
+            );
 
             //
             // Send handshake request and wait for reply
@@ -424,6 +427,7 @@ impl Centrifuge {
             token: config.token,
             name: config.name,
             version: config.version,
+            protocol: config.protocol,
             reconnect_strategy: config.reconnect_strategy,
             read_timeout: config.read_timeout,
             closer_write: None,

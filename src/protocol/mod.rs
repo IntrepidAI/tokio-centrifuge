@@ -295,3 +295,7 @@ fn serialize_tojson<T: AsRef<[u8]>, S: Serializer>(v: &T, serializer: S) -> Resu
     let value: serde_json::Value = serde_json::from_slice(v.as_ref()).map_err(serde::ser::Error::custom)?;
     value.serialize(serializer)
 }
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}

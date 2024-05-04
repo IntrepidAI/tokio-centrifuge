@@ -9,10 +9,12 @@ use async_tungstenite::tokio::ConnectStream;
 use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
 use futures::{SinkExt, StreamExt};
+use prost::Message as ProstMessage;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
+use crate::config::Protocol;
 use crate::protocol::{Command, RawCommand, RawReply, Reply};
 
 #[derive(Error, Debug)]
@@ -28,8 +30,13 @@ pub enum ReplyError {
 pub async fn websocket_handler(
     rt: tokio::runtime::Handle,
     stream: WebSocketStream<ConnectStream>,
-    mut control_ch: mpsc::Receiver<(Command, oneshot::Sender<Result<Reply, ReplyError>>, Duration)>,
+    mut control_ch: mpsc::Receiver<(
+        Command,
+        oneshot::Sender<Result<Reply, ReplyError>>,
+        Duration,
+    )>,
     mut closer_ch: mpsc::Receiver<bool>,
+    protocol: Protocol,
     on_push: impl Fn(Reply) + Send + Sync + 'static,
     on_error: impl Fn(anyhow::Error) + Send + Sync + 'static,
 ) -> bool {
@@ -84,32 +91,13 @@ pub async fn websocket_handler(
                         _ => continue 'outer,
                     };
 
-                    for line in data.lines() {
-                        let line = match line {
-                            Ok(line) => line,
-                            Err(err) => {
-                                log::debug!("failed to read line: {}", err);
-                                on_error(anyhow!(err));
-                                continue;
-                            }
-                        };
-
-                        log::trace!("<-- {}", line);
-
-                        let result = (|| -> Result<(Reply, u32), anyhow::Error> {
-                            let frame: RawReply = serde_json::from_str(&line)?;
-                            let frame_id = frame.id;
-                            let frame: Reply = frame.into();
-                            Ok((frame, frame_id))
-                        })();
-
+                    let handle_frame = |result| {
                         let (frame, frame_id) = match result {
                             Ok(data) => data,
                             Err(err) => {
                                 log::debug!("failed to parse frame: {}", err);
-                                log::debug!("{}", line);
                                 on_error(err);
-                                continue;
+                                return;
                             }
                         };
 
@@ -130,6 +118,54 @@ pub async fn websocket_handler(
                                 }
                             }
                         }
+                    };
+
+                    match protocol {
+                        Protocol::Json => {
+                            for line in data.lines() {
+                                let line = match line {
+                                    Ok(line) => line,
+                                    Err(err) => {
+                                        log::debug!("failed to read line: {}", err);
+                                        on_error(anyhow!(err));
+                                        continue;
+                                    }
+                                };
+
+                                log::trace!("<-- {:?}", line);
+
+                                let result = (|| -> Result<(Reply, u32), anyhow::Error> {
+                                    let frame: RawReply = serde_json::from_str(&line)?;
+                                    let frame_id = frame.id;
+                                    let frame: Reply = frame.into();
+                                    Ok((frame, frame_id))
+                                })();
+
+                                handle_frame(result);
+                            }
+                        }
+                        Protocol::Protobuf => {
+                            let mut data = &data[..];
+
+                            while !data.is_empty() {
+                                let Ok(len) = prost::decode_length_delimiter(data) else {
+                                    break;
+                                };
+                                let len_delimiter_len = prost::length_delimiter_len(len);
+                                log::trace!("<-- {}", format_protobuf(&data[..len_delimiter_len + len]));
+                                data = &data[len_delimiter_len..];
+
+                                let result = (|| -> Result<(Reply, u32), anyhow::Error> {
+                                    let frame = RawReply::decode(&data[..len])?;
+                                    let frame_id = frame.id;
+                                    let frame: Reply = frame.into();
+                                    Ok((frame, frame_id))
+                                })();
+
+                                data = &data[len..];
+                                handle_frame(result);
+                            }
+                        }
                     }
                 }
             }
@@ -143,7 +179,7 @@ pub async fn websocket_handler(
     let reply_map = reply_map_arc.clone();
     let writer_task = rt.spawn(async move {
         let mut batch = Vec::new();
-        let mut lines = Vec::new();
+        let mut commands = Vec::new();
 
         'outer: loop {
             tokio::select! {
@@ -151,8 +187,7 @@ pub async fn websocket_handler(
 
                 ping = ping_read.recv() => {
                     if ping.is_some() {
-                        let message = Message::Text("{}".to_string());
-                        log::trace!("--> {}", message.to_text().unwrap());
+                        let message = encode_commands(&[RawCommand::from(Command::Empty)], protocol);
                         match write_ws.send(message).await {
                             Ok(()) => (),
                             Err(err) => {
@@ -207,14 +242,12 @@ pub async fn websocket_handler(
 
                         let mut command = RawCommand::from(data);
                         command.id = id;
-                        let message = serde_json::to_string(&command).unwrap();
-                        log::trace!("--> {}", &message);
-                        lines.push(message);
+                        commands.push(command);
                     }
 
-                    if !lines.is_empty() {
-                        let message = Message::Text(lines.join("\n"));
-                        lines.clear();
+                    if !commands.is_empty() {
+                        let message = encode_commands(&commands, protocol);
+                        commands.clear();
 
                         match write_ws.send(message).await {
                             Ok(()) => (),
@@ -250,5 +283,41 @@ pub async fn websocket_handler(
         let reconnect = true;
         log::debug!("websocket connection aborted, reconnect={}", reconnect);
         reconnect
+    }
+}
+
+fn format_protobuf(buf: &[u8]) -> String {
+    fn buf_to_hex(buf: &[u8]) -> String {
+        buf.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+    }
+
+    let Ok(len) = prost::decode_length_delimiter(buf) else {
+        return buf_to_hex(buf);
+    };
+    let len_delimiter_len = prost::length_delimiter_len(len);
+
+    format!("{} {}", buf_to_hex(&buf[..len_delimiter_len]), buf_to_hex(&buf[len_delimiter_len..]))
+}
+
+fn encode_commands(commands: &[RawCommand], protocol: Protocol) -> Message {
+    match protocol {
+        Protocol::Json => {
+            let lines = commands.iter().map(|command| {
+                let line = serde_json::to_string(command).unwrap();
+                log::trace!("--> {}", &line);
+                line
+            }).collect::<Vec<_>>();
+
+            Message::Text(lines.join("\n"))
+        }
+        Protocol::Protobuf => {
+            let mut buf = Vec::new();
+            for command in commands.iter() {
+                let buf_len = buf.len();
+                command.encode_length_delimited(&mut buf).unwrap();
+                log::trace!("--> {}", format_protobuf(&buf[buf_len..]));
+            }
+            Message::Binary(buf)
+        }
     }
 }
