@@ -478,18 +478,20 @@ impl Centrifuge {
     ) -> FutureResult<impl Future<Output = Result<(), ()>>> {
         let (tx, rx) = oneshot::channel();
         let inner = self.0.lock().unwrap();
+        let deadline = Instant::now() + inner.read_timeout;
         if let Some(ref push_ch_write) = inner.push_ch_write {
             let _ = push_ch_write.send(
-                (channel.to_string(), serde_json::to_vec(data).unwrap(), tx, Instant::now() + inner.read_timeout)
+                (channel.to_string(), serde_json::to_vec(data).unwrap(), tx, deadline)
             );
         } else {
             let _ = tx.send(Err(ReplyError::Closed));
         }
-        FutureResult(async {
-            match rx.await {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(_)) => Err(()),
-                Err(_) => Err(()),
+        FutureResult(async move {
+            let result = tokio::time::timeout_at(deadline.into(), rx).await;
+            if let Ok(Ok(Ok(Reply::Publish(_)))) = result {
+                Ok(())
+            } else {
+                Err(())
             }
         })
     }
