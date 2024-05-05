@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[example]]
-name = "test"
-path = "examples/test.rs"
+name = "pubsub"
+path = "examples/pubsub.rs"
 required-features = ["examples"]
 
 [dependencies]
