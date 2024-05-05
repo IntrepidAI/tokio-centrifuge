@@ -14,9 +14,11 @@ use tokio::task::JoinSet;
 
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
-use crate::{errors, subscription};
-use crate::protocol::{Command, ConnectRequest, PublishRequest, Reply, SubscribeRequest, UnsubscribeRequest};
+use crate::protocol::{
+    Command, ConnectRequest, PublishRequest, PushData, Reply, SubscribeRequest, UnsubscribeRequest,
+};
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
+use crate::{errors, subscription};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -270,11 +272,27 @@ impl ClientInner {
             // Spawn tokio task to handle reads and writes to websocket
             //
             let client1 = client.clone();
+            let client2 = client.clone();
             let mut handler_future: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(
-                crate::client_handler::websocket_handler(rt, stream, control_read, closer_read, protocol, |_push| {
-                    // dbg!(push);
+                crate::client_handler::websocket_handler(rt, stream, control_read, closer_read, protocol, move |push| {
+                    if let Reply::Push(push) = push {
+                        if let PushData::Publication(publication) = push.data {
+                            let mut inner = client1.lock().unwrap();
+                            if let Some(sub_id) = inner.sub_name_to_id.get(&push.channel).copied() {
+                                if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
+                                    if sub.state == subscription::State::Subscribed {
+                                        if let Some(ref mut on_publication) = sub.on_publication {
+                                            on_publication(publication);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        log::debug!("unexpected push: {:?}", push);
+                    }
                 }, move |err| {
-                    let mut inner = client1.lock().unwrap();
+                    let mut inner = client2.lock().unwrap();
                     if let Some(ref mut on_error) = inner.on_error {
                         on_error(err);
                     }

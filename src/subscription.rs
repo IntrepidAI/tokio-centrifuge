@@ -1,10 +1,13 @@
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures::Future;
 use slotmap::new_key_type;
 use tokio::sync::oneshot;
 
-use crate::{client::{Client, FutureResult, MessageStore}, client_handler::ReplyError, protocol::Reply};
+use crate::client::{Client, FutureResult, MessageStore};
+use crate::client_handler::ReplyError;
+use crate::protocol::{Publication, Reply};
 
 new_key_type! { pub(crate) struct SubscriptionId; }
 
@@ -21,6 +24,7 @@ pub(crate) struct SubscriptionInner {
     on_subscribing: Option<Box<dyn FnMut() + Send + 'static>>,
     on_subscribed: Option<Box<dyn FnMut() + Send + 'static>>,
     on_unsubscribed: Option<Box<dyn FnMut() + Send + 'static>>,
+    pub(crate) on_publication: Option<Box<dyn FnMut(Publication) + Send + 'static>>,
     on_error: Option<Box<dyn FnMut(anyhow::Error) + Send + 'static>>,
     pub(crate) on_subscribed_ch: Vec<oneshot::Sender<Result<(), ()>>>,
     pub(crate) on_unsubscribed_ch: Vec<oneshot::Sender<()>>,
@@ -36,6 +40,7 @@ impl SubscriptionInner {
             on_subscribing: None,
             on_subscribed: None,
             on_unsubscribed: None,
+            on_publication: None,
             on_error: None,
             on_subscribed_ch: Vec::new(),
             on_unsubscribed_ch: Vec::new(),
@@ -193,6 +198,13 @@ impl Subscription {
         let mut inner = self.client.0.lock().unwrap();
         if let Some(sub) = inner.subscriptions.get_mut(self.id) {
             sub.on_unsubscribed = Some(Box::new(func));
+        }
+    }
+
+    pub fn on_publication(&self, func: impl FnMut(Publication) + Send + 'static) {
+        let mut inner = self.client.0.lock().unwrap();
+        if let Some(sub) = inner.subscriptions.get_mut(self.id) {
+            sub.on_publication = Some(Box::new(func));
         }
     }
 
