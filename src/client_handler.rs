@@ -292,7 +292,8 @@ pub async fn websocket_handler(
         log::debug!("websocket connection closed, reconnect={}", reconnect);
         reconnect
     } else {
-        let reconnect = true;
+        // don't reconnect in case of panic, because it can cause infinite reconnects
+        let reconnect = false;
         log::debug!("websocket connection aborted, reconnect={}", reconnect);
         reconnect
     }

@@ -185,6 +185,7 @@ pub struct ClientInfo {
 #[serde(default, rename_all = "camelCase")]
 pub struct Publication {
     #[prost(bytes = "vec", tag = "4")]
+    #[serde(deserialize_with = "super::deserialize_json")]
     pub data: Vec<u8>,
     #[prost(message, optional, tag = "5")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,7 +446,7 @@ pub struct PublishRequest {
     #[prost(string, tag = "1")]
     pub channel: String,
     #[prost(bytes = "vec", tag = "2")]
-    #[serde(serialize_with = "super::serialize_tojson")]
+    #[serde(serialize_with = "super::serialize_json")]
     pub data: Vec<u8>,
 }
 

@@ -24,7 +24,7 @@ pub(crate) struct SubscriptionInner {
     on_error: Option<Box<dyn FnMut(anyhow::Error) + Send + 'static>>,
     pub(crate) on_subscribed_ch: Vec<oneshot::Sender<Result<(), ()>>>,
     pub(crate) on_unsubscribed_ch: Vec<oneshot::Sender<()>>,
-    pub_ch_write: Option<MessageStore>,
+    pub(crate) pub_ch_write: Option<MessageStore>,
     read_timeout: Duration,
 }
 

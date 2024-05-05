@@ -343,7 +343,7 @@ impl ClientInner {
         let client1 = client.clone();
         let need_reconnect = async move {
             let mut reconnect_attempt = 0;
-            let (mut future, control_write) = loop {
+            let (future, control_write) = loop {
                 let (closer_write, mut closer_read) = {
                     let mut inner = client.lock().unwrap();
                     let (closer_write, closer_read) = mpsc::channel::<bool>(1);
@@ -405,12 +405,36 @@ impl ClientInner {
             let mut subscribed_channels: HashSet<SubscriptionId> = HashSet::new();
             let mut join_set = JoinSet::new();
 
-            let client1 = client.clone();
-            let control_write1 = control_write.clone();
+            #[allow(clippy::type_complexity)]
+            enum JoinSetResult {
+                MainTask(bool),
+                NewTask((
+                    Option<Pin<Box<dyn Future<Output = JoinSetResult> + Send>>>,
+                    mpsc::Receiver<Pin<Box<dyn Future<Output = JoinSetResult> + Send>>>,
+                )),
+                Irrelevant,
+            }
+
+            join_set.spawn_on(async {
+                JoinSetResult::MainTask(future.await)
+            }, &rt);
+
+            let (new_tasks_tx, new_tasks_rx) = mpsc::channel(1);
+
             join_set.spawn_on(async move {
+                JoinSetResult::NewTask((None, new_tasks_rx))
+            }, &rt);
+
+            #[allow(clippy::type_complexity)]
+            async fn publish_task(
+                client: Arc<Mutex<ClientInner>>,
+                control_write: mpsc::Sender<(Command, oneshot::Sender<Result<Reply, ReplyError>>, Duration)>,
+                get_store: impl Fn(&mut ClientInner) -> Option<&mut MessageStore>,
+            ) -> JoinSetResult {
                 let mut pub_ch_read = {
-                    let mut inner = client1.lock().unwrap();
-                    inner.pub_ch_write.as_mut().unwrap().reset_channel()
+                    let mut inner = client.lock().unwrap();
+                    let Some(store) = get_store(&mut inner) else { return JoinSetResult::Irrelevant; };
+                    store.reset_channel()
                 };
 
                 const MAX_CAPACITY: usize = 32;
@@ -418,8 +442,8 @@ impl ClientInner {
                 loop {
                     {
                         // lock mutex and fill our buffer
-                        let mut inner = client1.lock().unwrap();
-                        let Some(pub_ch_write) = &mut inner.pub_ch_write else { return; };
+                        let mut inner = client.lock().unwrap();
+                        let Some(pub_ch_write) = get_store(&mut inner) else { break; };
                         let now = Instant::now();
                         for _ in 0..MAX_CAPACITY {
                             if let Some(item) = pub_ch_write.get_next(now) {
@@ -431,19 +455,25 @@ impl ClientInner {
                     }
                     if buffer.is_empty() {
                         // wait for activity
-                        let Some(()) = pub_ch_read.recv().await else { return; };
+                        let Some(()) = pub_ch_read.recv().await else { break; };
                     } else {
                         // send messages
                         for item in buffer.drain(..) {
                             let timeout = item.deadline.saturating_duration_since(Instant::now());
-                            let _ = control_write1.send((Command::Publish(PublishRequest {
+                            let _ = control_write.send((Command::Publish(PublishRequest {
                                 channel: item.channel.to_string(),
                                 data: item.data,
                             }), item.reply, timeout)).await;
                         }
                     }
                 }
-            }, &rt);
+
+                JoinSetResult::Irrelevant
+            }
+
+            join_set.spawn_on(publish_task(client.clone(), control_write.clone(), |inner| {
+                inner.pub_ch_write.as_mut()
+            }), &rt);
 
             let control_write1 = control_write;
             join_set.spawn_on(async move {
@@ -451,7 +481,7 @@ impl ClientInner {
                     let mut buf = Vec::new();
                     let count = sub_ch_read.recv_many(&mut buf, 32).await;
                     if count == 0 {
-                        return;
+                        break;
                     }
 
                     let mut inner = client.lock().unwrap();
@@ -471,21 +501,32 @@ impl ClientInner {
                             let control_write = control_write1.clone();
                             subscribed_channels.insert(sub_id);
                             let client = client.clone();
+                            let new_tasks_tx = new_tasks_tx.clone();
                             rt.spawn(async move {
-                                let _ = control_write.send((command, tx, timeout)).await;
-                                let result = rx.await;
-                                let mut inner = client.lock().unwrap();
-                                if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
-                                    let msg = if let Ok(Ok(Reply::Subscribe(_))) = result {
-                                        sub.move_to_subscribed();
-                                        Ok(())
-                                    } else {
-                                        Err(())
-                                    };
-                                    for ch in sub.on_subscribed_ch.drain(..) {
-                                        let _ = ch.send(msg);
+                                {
+                                    let _ = control_write.send((command, tx, timeout)).await;
+                                    let result = rx.await;
+                                    let mut inner = client.lock().unwrap();
+                                    if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
+                                        let msg = if let Ok(Ok(Reply::Subscribe(_))) = result {
+                                            sub.move_to_subscribed();
+                                            Ok(())
+                                        } else {
+                                            Err(())
+                                        };
+                                        for ch in sub.on_subscribed_ch.drain(..) {
+                                            let _ = ch.send(msg);
+                                        }
                                     }
                                 }
+
+                                let _ = new_tasks_tx.send(Box::pin(publish_task(
+                                    client.clone(),
+                                    control_write.clone(),
+                                    move |inner| {
+                                        inner.subscriptions.get_mut(sub_id).and_then(|sub| sub.pub_ch_write.as_mut())
+                                    }
+                                ))).await;
                             });
                         }
 
@@ -511,22 +552,37 @@ impl ClientInner {
                         }
                     }
                 }
+
+                JoinSetResult::Irrelevant
             }, &rt);
 
-            loop {
-                tokio::select! {
-                    biased;
-                    need_reconnect = &mut future => {
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(JoinSetResult::MainTask(need_reconnect)) => {
                         return need_reconnect;
                     }
-                    result = join_set.join_next() => {
-                        if result.is_none() {
-                            break;
+                    Ok(JoinSetResult::NewTask((task, mut new_tasks_rx))) => {
+                        join_set.spawn_on(async move {
+                            if let Some(task) = new_tasks_rx.recv().await {
+                                JoinSetResult::NewTask((Some(task), new_tasks_rx))
+                            } else {
+                                JoinSetResult::Irrelevant
+                            }
+                        }, &rt);
+                        if let Some(task) = task {
+                            join_set.spawn_on(task, &rt);
                         }
+                    }
+                    Ok(JoinSetResult::Irrelevant) => {}
+                    Err(err) => {
+                        log::debug!("task failed: {:?}", err);
+                        return false;
                     }
                 }
             }
-            future.await
+
+            // there's always a main task, so this should never happen
+            unreachable!()
         }.await;
 
         {

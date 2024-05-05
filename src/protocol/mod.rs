@@ -291,12 +291,19 @@ impl From<RawPush> for Push {
     }
 }
 
-fn serialize_tojson<T: AsRef<[u8]>, S: Serializer>(v: &T, serializer: S) -> Result<S::Ok, S::Error> {
+fn serialize_json<T: AsRef<[u8]>, S: Serializer>(v: &T, serializer: S) -> Result<S::Ok, S::Error> {
     let value: serde_json::Value = serde_json::from_slice(v.as_ref())
         .map_err(|e| serde::ser::Error::custom(
             format!("unable to serialize to json: {e}, consider using protobuf instead")
         ))?;
     value.serialize(serializer)
+}
+
+fn deserialize_json<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u8>, D::Error> {
+    let value: serde_json::Value = serde::de::Deserialize::deserialize(deserializer)?;
+    serde_json::to_vec(&value).map_err(serde::de::Error::custom)
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
