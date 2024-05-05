@@ -292,7 +292,10 @@ impl From<RawPush> for Push {
 }
 
 fn serialize_tojson<T: AsRef<[u8]>, S: Serializer>(v: &T, serializer: S) -> Result<S::Ok, S::Error> {
-    let value: serde_json::Value = serde_json::from_slice(v.as_ref()).map_err(serde::ser::Error::custom)?;
+    let value: serde_json::Value = serde_json::from_slice(v.as_ref())
+        .map_err(|e| serde::ser::Error::custom(
+            format!("unable to serialize to json: {e}, consider using protobuf instead")
+        ))?;
     value.serialize(serializer)
 }
 

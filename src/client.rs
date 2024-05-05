@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::IntoFuture;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -6,13 +7,16 @@ use std::time::{Duration, Instant};
 use async_tungstenite::tokio::ConnectStream;
 use async_tungstenite::WebSocketStream;
 use futures::Future;
-use serde::Serialize;
+use slotmap::SlotMap;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
-use crate::protocol::{Command, ConnectRequest, PublishRequest, Reply};
+use crate::{errors, subscription};
+use crate::protocol::{Command, ConnectRequest, PublishRequest, Reply, SubscribeRequest, UnsubscribeRequest};
+use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -21,10 +25,78 @@ pub enum State {
     Connected,
 }
 
-type PublishMessage = (String, Vec<u8>, oneshot::Sender<Result<Reply, ReplyError>>, Instant);
+pub(crate) struct MessageStoreItem {
+    channel: Arc<str>,
+    data: Vec<u8>,
+    reply: oneshot::Sender<Result<Reply, ReplyError>>,
+    deadline: Instant,
+}
 
-#[allow(clippy::type_complexity)]
-struct CentrifugeInner {
+impl MessageStoreItem {
+    fn check_expiration(self, now: Instant) -> Option<Self> {
+        if self.deadline > now {
+            Some(self)
+        } else {
+            let _ = self.reply.send(Err(ReplyError::Timeout));
+            None
+        }
+    }
+}
+
+pub(crate) struct MessageStore {
+    timeout: Duration,
+    activity: mpsc::Sender<()>,
+    messages: VecDeque<MessageStoreItem>,
+}
+
+impl MessageStore {
+    pub fn new(timeout: Duration) -> (Self, mpsc::Receiver<()>) {
+        let (activity_tx, activity_rx) = mpsc::channel(1);
+        let store = Self {
+            timeout,
+            activity: activity_tx,
+            messages: VecDeque::new(),
+        };
+        (store, activity_rx)
+    }
+
+    pub fn publish(&mut self, channel: Arc<str>, data: Vec<u8>) -> oneshot::Receiver<Result<Reply, ReplyError>> {
+        let (tx, rx) = oneshot::channel();
+        let now = Instant::now();
+        let deadline = now + self.timeout;
+        self.messages.push_back(MessageStoreItem {
+            channel,
+            data,
+            reply: tx,
+            deadline,
+        });
+        while let Some(item) = self.messages.pop_front() {
+            if let Some(item) = item.check_expiration(now) {
+                self.messages.push_front(item);
+                break;
+            }
+        }
+        let _ = self.activity.try_send(());
+        rx
+    }
+
+    fn reset_channel(&mut self) -> mpsc::Receiver<()> {
+        let (activity_tx, activity_rx) = mpsc::channel(1);
+        self.activity = activity_tx;
+        activity_rx
+    }
+
+    fn get_next(&mut self, time: Instant) -> Option<MessageStoreItem> {
+        loop {
+            let item = self.messages.pop_front()?;
+            if let Some(item) = item.check_expiration(time) {
+                return Some(item);
+            }
+        }
+    }
+}
+
+pub(crate) struct ClientInner {
     rt: Handle,
     url: Arc<str>,
     state: State,
@@ -33,7 +105,7 @@ struct CentrifugeInner {
     version: String,
     protocol: Protocol,
     reconnect_strategy: Arc<dyn ReconnectStrategy>,
-    read_timeout: Duration,
+    pub(crate) read_timeout: Duration,
     closer_write: Option<mpsc::Sender<bool>>,
     on_connecting: Option<Box<dyn FnMut() + Send + 'static>>,
     on_connected: Option<Box<dyn FnMut() + Send + 'static>>,
@@ -41,28 +113,32 @@ struct CentrifugeInner {
     on_disconnected: Option<Box<dyn FnMut() + Send + 'static>>,
     on_disconnected_ch: Vec<oneshot::Sender<()>>,
     on_error: Option<Box<dyn FnMut(anyhow::Error) + Send + 'static>>,
-    push_ch_write: Option<mpsc::UnboundedSender<PublishMessage>>,
+    pub(crate) subscriptions: SlotMap<SubscriptionId, SubscriptionInner>,
+    pub(crate) sub_name_to_id: HashMap<String, SubscriptionId>,
+    pub(crate) pub_ch_write: Option<MessageStore>,
+    pub(crate) sub_ch_write: Option<mpsc::UnboundedSender<SubscriptionId>>,
     active_tasks: usize,
 }
 
-impl CentrifugeInner {
+impl ClientInner {
     // Disconnected, Connected -> Connecting
     //  - from Disconnected: `.connect()` called
     //  - from Connected: temporary connection loss / reconnect advice
     fn move_to_connecting(&mut self, outer: Arc<Mutex<Self>>) {
         debug_assert_ne!(self.state, State::Connecting);
-        self.set_state(State::Connecting);
-
-        let (push_ch_write, push_ch_read) = mpsc::unbounded_channel();
-        self.push_ch_write = Some(push_ch_write);
-        self.start_connecting(outer, push_ch_read);
+        if self.pub_ch_write.is_none() {
+            let (pub_ch_write, _) = MessageStore::new(self.read_timeout);
+            self.pub_ch_write = Some(pub_ch_write);
+        }
+        self._set_state(State::Connecting);
+        self.start_connecting(outer);
     }
 
     // Connecting -> Connected
     //  - from Connecting: successful connect
     fn move_to_connected(&mut self) {
         assert_eq!(self.state, State::Connecting);
-        self.set_state(State::Connected);
+        self._set_state(State::Connected);
     }
 
     // Connecting, Connected -> Disconnected
@@ -70,8 +146,9 @@ impl CentrifugeInner {
     //  - from Connected: `.disconnect()` called or terminal condition met
     fn move_to_disconnected(&mut self) {
         assert_ne!(self.state, State::Disconnected);
-        self.set_state(State::Disconnected);
         self.closer_write = None;
+        self.pub_ch_write = None;
+        self._set_state(State::Disconnected);
     }
 
     fn do_check_state(client: &Arc<Mutex<Self>>, expected: State) -> Result<(), bool> {
@@ -252,10 +329,7 @@ impl CentrifugeInner {
     //  - reconnects to the server as many times as it takes
     //  - processes connection (Connected state)
     //  - terminates, returning whether it should reconnect
-    async fn do_connection_cycle(
-        client: Arc<Mutex<Self>>,
-        mut push_ch_read: mpsc::UnboundedReceiver<PublishMessage>,
-    ) {
+    async fn do_connection_cycle(client: Arc<Mutex<Self>>) {
         // okay, this is bloody complicated, because there're many loops here
         //  1. inner loop is read-write into websocket
         //  2. on top of that, there's reconnect loop (which tries to connect once)
@@ -315,28 +389,137 @@ impl CentrifugeInner {
                 }
             };
 
-            {
+            let (sub_ch_write, mut sub_ch_read) = mpsc::unbounded_channel();
+            let rt = {
                 let mut inner = client.lock().unwrap();
                 inner.move_to_connected();
-            }
+                for (sub_id, sub) in inner.subscriptions.iter() {
+                    if sub.state != subscription::State::Unsubscribed {
+                        let _ = sub_ch_write.send(sub_id);
+                    }
+                }
+                inner.sub_ch_write = Some(sub_ch_write);
+                inner.rt.clone()
+            };
 
-            loop {
-                let task = async {
-                    let (channel, data, reply_ch, deadline) = push_ch_read.recv().await?;
-                    let timeout = deadline.saturating_duration_since(Instant::now());
-                    let _ = control_write.send((Command::Publish(PublishRequest {
-                        channel,
-                        data,
-                    }), reply_ch, timeout)).await;
-                    Some(())
+            let mut subscribed_channels: HashSet<SubscriptionId> = HashSet::new();
+            let mut join_set = JoinSet::new();
+
+            let client1 = client.clone();
+            let control_write1 = control_write.clone();
+            join_set.spawn_on(async move {
+                let mut pub_ch_read = {
+                    let mut inner = client1.lock().unwrap();
+                    inner.pub_ch_write.as_mut().unwrap().reset_channel()
                 };
 
+                const MAX_CAPACITY: usize = 32;
+                let mut buffer = Vec::new();
+                loop {
+                    {
+                        // lock mutex and fill our buffer
+                        let mut inner = client1.lock().unwrap();
+                        let Some(pub_ch_write) = &mut inner.pub_ch_write else { return; };
+                        let now = Instant::now();
+                        for _ in 0..MAX_CAPACITY {
+                            if let Some(item) = pub_ch_write.get_next(now) {
+                                buffer.push(item);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if buffer.is_empty() {
+                        // wait for activity
+                        let Some(()) = pub_ch_read.recv().await else { return; };
+                    } else {
+                        // send messages
+                        for item in buffer.drain(..) {
+                            let timeout = item.deadline.saturating_duration_since(Instant::now());
+                            let _ = control_write1.send((Command::Publish(PublishRequest {
+                                channel: item.channel.to_string(),
+                                data: item.data,
+                            }), item.reply, timeout)).await;
+                        }
+                    }
+                }
+            }, &rt);
+
+            let control_write1 = control_write;
+            join_set.spawn_on(async move {
+                loop {
+                    let mut buf = Vec::new();
+                    let count = sub_ch_read.recv_many(&mut buf, 32).await;
+                    if count == 0 {
+                        return;
+                    }
+
+                    let mut inner = client.lock().unwrap();
+                    let rt = inner.rt.clone();
+                    let timeout = inner.read_timeout;
+
+                    for sub_id in buf.drain(..count) {
+                        let Some(sub) = inner.subscriptions.get_mut(sub_id) else { continue; };
+
+                        if sub.state != subscription::State::Unsubscribed && !subscribed_channels.contains(&sub_id) {
+                            // subscribe
+                            let (tx, rx) = oneshot::channel();
+                            let command = Command::Subscribe(SubscribeRequest {
+                                channel: (*sub.channel).into(),
+                                ..Default::default()
+                            });
+                            let control_write = control_write1.clone();
+                            subscribed_channels.insert(sub_id);
+                            let client = client.clone();
+                            rt.spawn(async move {
+                                let _ = control_write.send((command, tx, timeout)).await;
+                                let result = rx.await;
+                                let mut inner = client.lock().unwrap();
+                                if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
+                                    let msg = if let Ok(Ok(Reply::Subscribe(_))) = result {
+                                        sub.move_to_subscribed();
+                                        Ok(())
+                                    } else {
+                                        Err(())
+                                    };
+                                    for ch in sub.on_subscribed_ch.drain(..) {
+                                        let _ = ch.send(msg);
+                                    }
+                                }
+                            });
+                        }
+
+                        if sub.state == subscription::State::Unsubscribed && subscribed_channels.contains(&sub_id) {
+                            // unsubscribe
+                            let (tx, rx) = oneshot::channel();
+                            let command = Command::Unsubscribe(UnsubscribeRequest {
+                                channel: (*sub.channel).into(),
+                            });
+                            let control_write = control_write1.clone();
+                            subscribed_channels.remove(&sub_id);
+                            let client = client.clone();
+                            rt.spawn(async move {
+                                let _ = control_write.send((command, tx, timeout)).await;
+                                let _ = rx.await;
+                                let mut inner = client.lock().unwrap();
+                                if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
+                                    for ch in sub.on_unsubscribed_ch.drain(..) {
+                                        let _ = ch.send(());
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }, &rt);
+
+            loop {
                 tokio::select! {
                     biased;
                     need_reconnect = &mut future => {
                         return need_reconnect;
                     }
-                    result = task => {
+                    result = join_set.join_next() => {
                         if result.is_none() {
                             break;
                         }
@@ -364,17 +547,17 @@ impl CentrifugeInner {
         }
     }
 
-    fn start_connecting(&mut self, client: Arc<Mutex<Self>>, push_ch_read: mpsc::UnboundedReceiver<PublishMessage>) {
+    fn start_connecting(&mut self, client: Arc<Mutex<Self>>) {
         self.active_tasks += 1;
 
         self.rt.spawn(async move {
-            Self::do_connection_cycle(client.clone(), push_ch_read).await;
+            Self::do_connection_cycle(client.clone()).await;
             let mut inner = client.lock().unwrap();
             inner.active_tasks -= 1;
         });
     }
 
-    fn set_state(&mut self, state: State) {
+    fn _set_state(&mut self, state: State) {
         log::debug!("state: {:?} -> {:?}", self.state, state);
         self.state = state;
 
@@ -400,7 +583,7 @@ impl CentrifugeInner {
 
 // this is a regular future which you can poll to get result,
 // but it's totally fine to drop it if you don't need results
-pub struct FutureResult<T>(T);
+pub struct FutureResult<T>(pub(crate) T);
 
 impl<T, R> IntoFuture for FutureResult<T>
 where
@@ -414,13 +597,14 @@ where
     }
 }
 
-pub struct Centrifuge(Arc<Mutex<CentrifugeInner>>);
+#[derive(Clone)]
+pub struct Client(pub(crate) Arc<Mutex<ClientInner>>);
 
-impl Centrifuge {
+impl Client {
     pub fn new(url: &str, config: Config) -> Self {
         let rt = config.runtime.unwrap_or_else(|| tokio::runtime::Handle::current());
 
-        Self(Arc::new(Mutex::new(CentrifugeInner {
+        Self(Arc::new(Mutex::new(ClientInner {
             rt,
             url: url.into(),
             state: State::Disconnected,
@@ -437,7 +621,10 @@ impl Centrifuge {
             on_disconnected: None,
             on_disconnected_ch: Vec::new(),
             on_error: None,
-            push_ch_write: None,
+            subscriptions: SlotMap::with_key(),
+            sub_name_to_id: HashMap::new(),
+            sub_ch_write: None,
+            pub_ch_write: None,
             active_tasks: 0,
         })))
     }
@@ -477,21 +664,21 @@ impl Centrifuge {
         })
     }
 
-    pub fn publish<T: ?Sized + Serialize>(
+    pub fn publish(
         &self,
         channel: &str,
-        data: &T,
+        data: Vec<u8>,
     ) -> FutureResult<impl Future<Output = Result<(), ()>>> {
-        let (tx, rx) = oneshot::channel();
-        let inner = self.0.lock().unwrap();
-        let deadline = Instant::now() + inner.read_timeout;
-        if let Some(ref push_ch_write) = inner.push_ch_write {
-            let _ = push_ch_write.send(
-                (channel.to_string(), serde_json::to_vec(data).unwrap(), tx, deadline)
-            );
+        let mut inner = self.0.lock().unwrap();
+        let read_timeout = inner.read_timeout;
+        let deadline = Instant::now() + read_timeout;
+        let rx = if let Some(ref mut pub_ch_write) = inner.pub_ch_write {
+            pub_ch_write.publish(channel.into(), data)
         } else {
+            let (tx, rx) = oneshot::channel();
             let _ = tx.send(Err(ReplyError::Closed));
-        }
+            rx
+        };
         FutureResult(async move {
             let result = tokio::time::timeout_at(deadline.into(), rx).await;
             if let Ok(Ok(Ok(Reply::Publish(_)))) = result {
@@ -500,6 +687,38 @@ impl Centrifuge {
                 Err(())
             }
         })
+    }
+
+    pub fn new_subscription(&self, channel: &str) -> Result<Subscription, errors::NewSubscriptionError> {
+        let mut inner = self.0.lock().unwrap();
+        if inner.sub_name_to_id.contains_key(channel) {
+            return Err(errors::NewSubscriptionError::Duplicate);
+        }
+
+        let timeout = inner.read_timeout;
+        let key = inner.subscriptions.insert(SubscriptionInner::new(channel, timeout));
+        inner.sub_name_to_id.insert(channel.to_string(), key);
+        Ok(Subscription::new(self, key))
+    }
+
+    pub fn get_subscription(&self, channel: &str) -> Option<Subscription> {
+        let inner = self.0.lock().unwrap();
+        inner.sub_name_to_id.get(channel).map(|id| Subscription::new(self, *id))
+    }
+
+    pub fn remove_subscription(&self, subscription: Subscription) -> Result<(), errors::RemoveSubscriptionError> {
+        let mut inner = self.0.lock().unwrap();
+        if let Some(sub) = inner.subscriptions.get(subscription.id) {
+            if sub.state != subscription::State::Unsubscribed {
+                Err(errors::RemoveSubscriptionError::NotUnsubscribed)
+            } else {
+                let sub = inner.subscriptions.remove(subscription.id).unwrap();
+                inner.sub_name_to_id.remove(&*sub.channel);
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub fn on_connecting(&self, func: impl FnMut() + Send + 'static) {

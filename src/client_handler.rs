@@ -17,12 +17,14 @@ use tokio::task::AbortHandle;
 use crate::config::Protocol;
 use crate::protocol::{Command, RawCommand, RawReply, Reply};
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyError {
-    #[error("request timed out after {0:?}")]
-    Timeout(Duration),
+    #[error("request timed out")]
+    Timeout,
     #[error("connection closed")]
     Closed,
+    #[error("inappropriate protocol")]
+    InappropriateProtocol,
 }
 
 #[allow(clippy::option_map_unit_fn)]
@@ -132,7 +134,7 @@ pub async fn websocket_handler(
                                     }
                                 };
 
-                                log::trace!("<-- {:?}", line);
+                                log::trace!("<-- {}", line);
 
                                 let result = (|| -> Result<(Reply, u32), anyhow::Error> {
                                     let frame: RawReply = serde_json::from_str(&line)?;
@@ -187,12 +189,14 @@ pub async fn websocket_handler(
 
                 ping = ping_read.recv() => {
                     if ping.is_some() {
-                        let message = encode_commands(&[RawCommand::from(Command::Empty)], protocol);
-                        match write_ws.send(message).await {
-                            Ok(()) => (),
-                            Err(err) => {
-                                on_error(anyhow!(err));
-                                break 'outer;
+                        let message = encode_commands(&[RawCommand::from(Command::Empty)], protocol, |_, _| {});
+                        if let Some(message) = message {
+                            match write_ws.send(message).await {
+                                Ok(()) => (),
+                                Err(err) => {
+                                    on_error(anyhow!(err));
+                                    break 'outer;
+                                }
                             }
                         }
                     } else {
@@ -209,7 +213,7 @@ pub async fn websocket_handler(
                         let (data, reply_ch, timeout) = control_msg;
 
                         if timeout == Duration::ZERO {
-                            let _ = reply_ch.send(Err(ReplyError::Timeout(timeout)));
+                            let _ = reply_ch.send(Err(ReplyError::Timeout));
                             continue 'outer;
                         }
 
@@ -229,7 +233,7 @@ pub async fn websocket_handler(
                                     tokio::time::sleep(timeout).await;
                                     let mut map = reply_map.map.lock().unwrap();
                                     if let Some((ch, _)) = map.remove(&id) {
-                                        let _ = ch.send(Err(ReplyError::Timeout(timeout)));
+                                        let _ = ch.send(Err(ReplyError::Timeout));
                                     }
                                 }).abort_handle())
                             }
@@ -246,14 +250,22 @@ pub async fn websocket_handler(
                     }
 
                     if !commands.is_empty() {
-                        let message = encode_commands(&commands, protocol);
+                        let message = encode_commands(&commands, protocol, |id, error| {
+                            let mut map = reply_map.map.lock().unwrap();
+                            if let Some((ch, abort_handle)) = map.remove(&id) {
+                                let _ = ch.send(Err(error));
+                                abort_handle.map(|h| h.abort());
+                            }
+                        });
                         commands.clear();
 
-                        match write_ws.send(message).await {
-                            Ok(()) => (),
-                            Err(err) => {
-                                on_error(anyhow!(err));
-                                break 'outer;
+                        if let Some(message) = message {
+                            match write_ws.send(message).await {
+                                Ok(()) => (),
+                                Err(err) => {
+                                    on_error(anyhow!(err));
+                                    break 'outer;
+                                }
                             }
                         }
                     }
@@ -299,16 +311,28 @@ fn format_protobuf(buf: &[u8]) -> String {
     format!("{} {}", buf_to_hex(&buf[..len_delimiter_len]), buf_to_hex(&buf[len_delimiter_len..]))
 }
 
-fn encode_commands(commands: &[RawCommand], protocol: Protocol) -> Message {
+fn encode_commands(commands: &[RawCommand], protocol: Protocol, mut on_error: impl FnMut(u32, ReplyError)) -> Option<Message> {
     match protocol {
         Protocol::Json => {
-            let lines = commands.iter().map(|command| {
-                let line = serde_json::to_string(command).unwrap();
-                log::trace!("--> {}", &line);
-                line
-            }).collect::<Vec<_>>();
+            let mut lines = Vec::with_capacity(commands.len());
+            for command in commands.iter() {
+                match serde_json::to_string(command) {
+                    Ok(line) => {
+                        log::trace!("--> {}", &line);
+                        lines.push(line);
+                    }
+                    Err(err) => {
+                        on_error(command.id, ReplyError::InappropriateProtocol);
+                        log::debug!("failed to encode command: {:?}", err);
+                    }
+                }
+            }
 
-            Message::Text(lines.join("\n"))
+            if lines.is_empty() {
+                None
+            } else {
+                Some(Message::Text(lines.join("\n")))
+            }
         }
         Protocol::Protobuf => {
             let mut buf = Vec::new();
@@ -317,7 +341,7 @@ fn encode_commands(commands: &[RawCommand], protocol: Protocol) -> Message {
                 command.encode_length_delimited(&mut buf).unwrap();
                 log::trace!("--> {}", format_protobuf(&buf[buf_len..]));
             }
-            Message::Binary(buf)
+            Some(Message::Binary(buf))
         }
     }
 }

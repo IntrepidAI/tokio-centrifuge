@@ -356,22 +356,31 @@ pub struct RefreshResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct SubscribeRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub channel: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub token: String,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub recover: bool,
     #[prost(string, tag = "6")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub epoch: String,
     #[prost(uint64, tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(bytes = "vec", tag = "8")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<u8>,
     #[prost(bool, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub positioned: bool,
     #[prost(bool, tag = "10")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub recoverable: bool,
     #[prost(bool, tag = "11")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub join_leave: bool,
 }
 
@@ -422,6 +431,7 @@ pub struct SubRefreshResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct UnsubscribeRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub channel: String,
 }
 
