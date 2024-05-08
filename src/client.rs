@@ -763,16 +763,16 @@ impl Client {
         })
     }
 
-    pub fn new_subscription(&self, channel: &str) -> Result<Subscription, errors::NewSubscriptionError> {
+    pub fn new_subscription(&self, channel: &str) -> Subscription {
         let mut inner = self.0.lock().unwrap();
-        if inner.sub_name_to_id.contains_key(channel) {
-            return Err(errors::NewSubscriptionError::Duplicate);
+        if let Some(key) = inner.sub_name_to_id.get(channel) {
+            return Subscription::new(self, *key);
         }
 
         let timeout = inner.read_timeout;
         let key = inner.subscriptions.insert(SubscriptionInner::new(channel, timeout));
         inner.sub_name_to_id.insert(channel.to_string(), key);
-        Ok(Subscription::new(self, key))
+        Subscription::new(self, key)
     }
 
     pub fn get_subscription(&self, channel: &str) -> Option<Subscription> {

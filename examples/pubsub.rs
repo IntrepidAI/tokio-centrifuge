@@ -30,7 +30,7 @@ async fn main() {
         log::info!("error: {:?}", err);
     });
 
-    let sub = client.new_subscription("news").unwrap();
+    let sub = client.new_subscription("news");
     sub.on_subscribed(|| {
         log::info!("subscribed to news");
     });
