@@ -216,10 +216,19 @@ impl ClientInner {
                         log::debug!("{err}");
                         let mut inner = client.lock().unwrap();
                         if inner.state != State::Connecting { return Err(false); }
+
+                        let do_reconnect = match err {
+                            async_tungstenite::tungstenite::Error::Url(_) => {
+                                // invalid url, don't reconnect
+                                false
+                            }
+                            _ => true
+                        };
+
                         if let Some(ref mut on_error) = inner.on_error {
                             on_error(err.into());
                         }
-                        Err(true)
+                        Err(do_reconnect)
                     }
                 }
             };
@@ -312,15 +321,24 @@ impl ClientInner {
                 result = connect_rx => {
                     match result {
                         Ok(Ok(reply)) => {
-                            if let Reply::Connect(connect) = reply {
-                                // handshake completed
-                                log::debug!("connection established with {} {}", connect.client, connect.version);
-                                Ok((handler_future, control_write))
-                            } else {
-                                log::debug!("unexpected reply: {:?}", reply);
-                                // close connection, don't reconnect
-                                let _ = closer_write.try_send(false);
-                                Err(handler_future.await)
+                            match reply {
+                                Reply::Connect(connect) => {
+                                    // handshake completed
+                                    log::debug!("connection established with {} {}", connect.client, connect.version);
+                                    Ok((handler_future, control_write))
+                                }
+                                Reply::Error(err) => {
+                                    log::debug!("handshake failed: {}", &err.message);
+                                    // close connection, don't reconnect
+                                    let _ = closer_write.try_send(err.temporary);
+                                    Err(handler_future.await)
+                                }
+                                _ => {
+                                    log::debug!("unexpected reply: {:?}", reply);
+                                    // close connection, don't reconnect
+                                    let _ = closer_write.try_send(false);
+                                    Err(handler_future.await)
+                                }
                             }
                         }
                         Ok(Err(err)) => {

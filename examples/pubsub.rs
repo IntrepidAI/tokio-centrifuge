@@ -10,6 +10,7 @@ async fn main() {
 
     simple_logger::SimpleLogger::new()
         .with_level(log::LevelFilter::Info)
+        .with_module_level("tokio_centrifuge", log::LevelFilter::Trace)
         .init().unwrap();
 
     let client = Client::new(

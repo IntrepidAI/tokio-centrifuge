@@ -24,6 +24,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum Reply {
     Push(Push),
+    Error(Error),
     Connect(ConnectResult),
     Subscribe(SubscribeResult),
     Unsubscribe(UnsubscribeResult),
@@ -111,6 +112,9 @@ impl From<Reply> for RawReply {
         let mut result = RawReply::default();
 
         match value {
+            Reply::Error(v) => {
+                result.error = Some(v);
+            }
             Reply::Push(v) => {
                 result.push = Some(v.into());
             }
@@ -230,7 +234,9 @@ impl From<RawCommand> for Command {
 
 impl From<RawReply> for Reply {
     fn from(value: RawReply) -> Self {
-        if let Some(v) = value.push {
+        if let Some(v) = value.error {
+            Self::Error(v)
+        } else if let Some(v) = value.push {
             Self::Push(v.into())
         } else if let Some(v) = value.connect {
             Self::Connect(v)
