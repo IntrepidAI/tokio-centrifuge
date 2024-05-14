@@ -832,4 +832,8 @@ impl Client {
     pub fn state(&self) -> State {
         self.0.lock().unwrap().state
     }
+
+    pub fn set_token(&self, token: impl Into<String>) {
+        self.0.lock().unwrap().token = token.into();
+    }
 }
