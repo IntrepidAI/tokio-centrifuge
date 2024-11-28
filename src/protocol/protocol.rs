@@ -6,10 +6,13 @@
 #[serde(default, rename_all = "camelCase")]
 pub struct Error {
     #[prost(uint32, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub code: u32,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub message: String,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub temporary: bool,
 }
 
@@ -17,10 +20,13 @@ pub struct Error {
 #[serde(default, rename_all = "camelCase")]
 pub struct EmulationRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub node: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub session: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
 
@@ -38,40 +44,40 @@ pub struct RawCommand {
     /// client passed more than one request. We are not using oneof here due to JSON
     /// interoperability concerns.
     #[prost(message, optional, tag = "4")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub connect: Option<ConnectRequest>,
     #[prost(message, optional, tag = "5")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subscribe: Option<SubscribeRequest>,
     #[prost(message, optional, tag = "6")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub unsubscribe: Option<UnsubscribeRequest>,
     #[prost(message, optional, tag = "7")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub publish: Option<PublishRequest>,
     #[prost(message, optional, tag = "8")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub presence: Option<PresenceRequest>,
     #[prost(message, optional, tag = "9")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub presence_stats: Option<PresenceStatsRequest>,
     #[prost(message, optional, tag = "10")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub history: Option<HistoryRequest>,
     #[prost(message, optional, tag = "11")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ping: Option<PingRequest>,
     #[prost(message, optional, tag = "12")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub send: Option<SendRequest>,
     #[prost(message, optional, tag = "13")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub rpc: Option<RpcRequest>,
     #[prost(message, optional, tag = "14")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub refresh: Option<RefreshRequest>,
     #[prost(message, optional, tag = "15")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub sub_refresh: Option<SubRefreshRequest>,
 }
 
@@ -83,48 +89,49 @@ pub struct RawReply {
     /// Id will only be set to a value > 0 for replies to commands. For pushes
     /// it will have zero value.
     #[prost(uint32, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub id: u32,
     /// Error can only be set in replies to commands. For pushes it will have zero value.
     #[prost(message, optional, tag = "2")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub error: Option<Error>,
     /// ProtocolVersion2 server can send one of the following fields. We are not using
     /// oneof here due to JSON interoperability concerns.
     #[prost(message, optional, tag = "4")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub push: Option<RawPush>,
     #[prost(message, optional, tag = "5")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub connect: Option<ConnectResult>,
     #[prost(message, optional, tag = "6")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subscribe: Option<SubscribeResult>,
     #[prost(message, optional, tag = "7")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub unsubscribe: Option<UnsubscribeResult>,
     #[prost(message, optional, tag = "8")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub publish: Option<PublishResult>,
     #[prost(message, optional, tag = "9")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub presence: Option<PresenceResult>,
     #[prost(message, optional, tag = "10")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub presence_stats: Option<PresenceStatsResult>,
     #[prost(message, optional, tag = "11")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub history: Option<HistoryResult>,
     #[prost(message, optional, tag = "12")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ping: Option<PingResult>,
     #[prost(message, optional, tag = "13")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub rpc: Option<RpcResult>,
     #[prost(message, optional, tag = "14")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub refresh: Option<RefreshResult>,
     #[prost(message, optional, tag = "15")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub sub_refresh: Option<SubRefreshResult>,
 }
 
@@ -135,36 +142,37 @@ pub struct RawReply {
 #[serde(default, rename_all = "camelCase")]
 pub struct RawPush {
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     /// ProtocolVersion2 server can push one of the following fields to the client. We are
     /// not using oneof here due to JSON interoperability concerns.
     #[prost(message, optional, tag = "4")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     #[serde(rename = "pub")]
     pub publication: Option<Publication>,
     #[prost(message, optional, tag = "5")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub join: Option<Join>,
     #[prost(message, optional, tag = "6")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub leave: Option<Leave>,
     #[prost(message, optional, tag = "7")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub unsubscribe: Option<Unsubscribe>,
     #[prost(message, optional, tag = "8")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub message: Option<Message>,
     #[prost(message, optional, tag = "9")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subscribe: Option<Subscribe>,
     #[prost(message, optional, tag = "10")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub connect: Option<Connect>,
     #[prost(message, optional, tag = "11")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub disconnect: Option<Disconnect>,
     #[prost(message, optional, tag = "12")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub refresh: Option<Refresh>,
 }
 
@@ -172,12 +180,16 @@ pub struct RawPush {
 #[serde(default, rename_all = "camelCase")]
 pub struct ClientInfo {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub user: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub client: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub conn_info: Vec<u8>,
     #[prost(bytes = "vec", tag = "4")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub chan_info: Vec<u8>,
 }
 
@@ -186,13 +198,16 @@ pub struct ClientInfo {
 pub struct Publication {
     #[prost(bytes = "vec", tag = "4")]
     #[serde(deserialize_with = "super::deserialize_json")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(message, optional, tag = "5")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub info: Option<ClientInfo>,
     #[prost(uint64, tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(map = "string, string", tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub tags: std::collections::HashMap<String, String>,
 }
 
@@ -200,7 +215,7 @@ pub struct Publication {
 #[serde(default, rename_all = "camelCase")]
 pub struct Join {
     #[prost(message, optional, tag = "1")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub info: Option<ClientInfo>,
 }
 
@@ -208,7 +223,7 @@ pub struct Join {
 #[serde(default, rename_all = "camelCase")]
 pub struct Leave {
     #[prost(message, optional, tag = "1")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub info: Option<ClientInfo>,
 }
 
@@ -216,8 +231,10 @@ pub struct Leave {
 #[serde(default, rename_all = "camelCase")]
 pub struct Unsubscribe {
     #[prost(uint32, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub code: u32,
     #[prost(string, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub reason: String,
 }
 
@@ -225,14 +242,19 @@ pub struct Unsubscribe {
 #[serde(default, rename_all = "camelCase")]
 pub struct Subscribe {
     #[prost(bool, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub recoverable: bool,
     #[prost(string, tag = "4")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub epoch: String,
     #[prost(uint64, tag = "5")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(bool, tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub positioned: bool,
     #[prost(bytes = "vec", tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
 
@@ -240,6 +262,7 @@ pub struct Subscribe {
 #[serde(default, rename_all = "camelCase")]
 pub struct Message {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
 
@@ -247,24 +270,34 @@ pub struct Message {
 #[serde(default, rename_all = "camelCase")]
 pub struct Connect {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub client: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "4")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subs: std::collections::HashMap<String, SubscribeResult>,
     #[prost(bool, tag = "5")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
     #[prost(uint32, tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ping: u32,
     #[prost(bool, tag = "8")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub pong: bool,
     #[prost(string, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub session: String,
     #[prost(string, tag = "10")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub node: String,
 }
 
@@ -272,10 +305,13 @@ pub struct Connect {
 #[serde(default, rename_all = "camelCase")]
 pub struct Disconnect {
     #[prost(uint32, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub code: u32,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub reason: String,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub reconnect: bool,
 }
 
@@ -283,8 +319,10 @@ pub struct Disconnect {
 #[serde(default, rename_all = "camelCase")]
 pub struct Refresh {
     #[prost(bool, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
 }
 
@@ -292,19 +330,19 @@ pub struct Refresh {
 #[serde(default, rename_all = "camelCase")]
 pub struct ConnectRequest {
     #[prost(string, tag = "1")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub token: String,
     #[prost(bytes = "vec", tag = "2")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "3")]
-    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subs: std::collections::HashMap<String, SubscribeRequest>,
     #[prost(string, tag = "4")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub name: String,
     #[prost(string, tag = "5")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
 }
 
@@ -312,24 +350,34 @@ pub struct ConnectRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct ConnectResult {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub client: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "4")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
     #[prost(bytes = "vec", tag = "5")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub subs: std::collections::HashMap<String, SubscribeResult>,
     #[prost(uint32, tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ping: u32,
     #[prost(bool, tag = "8")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub pong: bool,
     #[prost(string, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub session: String,
     #[prost(string, tag = "10")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub node: String,
 }
 
@@ -337,6 +385,7 @@ pub struct ConnectResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct RefreshRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub token: String,
 }
 
@@ -344,12 +393,16 @@ pub struct RefreshRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct RefreshResult {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub client: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "4")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
 }
 
@@ -357,22 +410,22 @@ pub struct RefreshResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct SubscribeRequest {
     #[prost(string, tag = "1")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     #[prost(string, tag = "2")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub token: String,
     #[prost(bool, tag = "3")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub recover: bool,
     #[prost(string, tag = "6")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub epoch: String,
     #[prost(uint64, tag = "7")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(bytes = "vec", tag = "8")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(bool, tag = "9")]
     #[serde(skip_serializing_if = "super::is_default")]
@@ -389,24 +442,34 @@ pub struct SubscribeRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct SubscribeResult {
     #[prost(bool, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
     #[prost(bool, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub recoverable: bool,
     #[prost(string, tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub epoch: String,
     #[prost(message, repeated, tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub publications: Vec<Publication>,
     #[prost(bool, tag = "8")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub recovered: bool,
     #[prost(uint64, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(bool, tag = "10")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub positioned: bool,
     #[prost(bytes = "vec", tag = "11")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(bool, tag = "12")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub was_recovering: bool,
 }
 
@@ -414,8 +477,10 @@ pub struct SubscribeResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct SubRefreshRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub token: String,
 }
 
@@ -423,8 +488,10 @@ pub struct SubRefreshRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct SubRefreshResult {
     #[prost(bool, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub expires: bool,
     #[prost(uint32, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
 }
 
@@ -432,7 +499,7 @@ pub struct SubRefreshResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct UnsubscribeRequest {
     #[prost(string, tag = "1")]
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
 }
 
@@ -444,9 +511,11 @@ pub struct UnsubscribeResult {}
 #[serde(default, rename_all = "camelCase")]
 pub struct PublishRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     #[prost(bytes = "vec", tag = "2")]
     #[serde(serialize_with = "super::serialize_json")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
 
@@ -458,6 +527,7 @@ pub struct PublishResult {}
 #[serde(default, rename_all = "camelCase")]
 pub struct PresenceRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
 }
 
@@ -465,6 +535,7 @@ pub struct PresenceRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct PresenceResult {
     #[prost(map = "string, message", tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub presence: std::collections::HashMap<String, ClientInfo>,
 }
 
@@ -472,6 +543,7 @@ pub struct PresenceResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct PresenceStatsRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
 }
 
@@ -479,8 +551,10 @@ pub struct PresenceStatsRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct PresenceStatsResult {
     #[prost(uint32, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub num_clients: u32,
     #[prost(uint32, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub num_users: u32,
 }
 
@@ -488,8 +562,10 @@ pub struct PresenceStatsResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct StreamPosition {
     #[prost(uint64, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub epoch: String,
 }
 
@@ -497,13 +573,16 @@ pub struct StreamPosition {
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryRequest {
     #[prost(string, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     #[prost(int32, tag = "7")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub limit: i32,
     #[prost(message, optional, tag = "8")]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub since: Option<StreamPosition>,
     #[prost(bool, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub reverse: bool,
 }
 
@@ -511,10 +590,13 @@ pub struct HistoryRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryResult {
     #[prost(message, repeated, tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub publications: Vec<Publication>,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub epoch: String,
     #[prost(uint64, tag = "3")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
 }
 
@@ -530,8 +612,11 @@ pub struct PingResult {}
 #[serde(default, rename_all = "camelCase")]
 pub struct RpcRequest {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(deserialize_with = "super::deserialize_json")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(string, tag = "2")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub method: String,
 }
 
@@ -539,6 +624,7 @@ pub struct RpcRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct RpcResult {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
 
@@ -546,5 +632,6 @@ pub struct RpcResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct SendRequest {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }

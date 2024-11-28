@@ -244,6 +244,7 @@ impl ClientInner {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn do_handshake(
         client: &Arc<Mutex<Self>>,
         closer_write: mpsc::Sender<bool>,

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::BufRead;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,13 +8,13 @@ use async_tungstenite::tokio::ConnectStream;
 use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
 use futures::{SinkExt, StreamExt};
-use prost::Message as ProstMessage;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 
 use crate::config::Protocol;
 use crate::protocol::{Command, RawCommand, RawReply, Reply};
+use crate::utils::{decode_frames, encode_frames};
 
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyError {
@@ -84,7 +83,7 @@ pub async fn websocket_handler(
                             if let Some(close_frame) = close_frame {
                                 let code: u16 = close_frame.code.into();
                                 let reason = close_frame.reason;
-                                let reconnect = !matches!(code, 3500..=3999 | 4500..=4999);
+                                let reconnect = crate::errors::ErrorCode(code).should_reconnect();
                                 log::debug!("connection closed by remote, code={code}, reason={reason}");
                                 break 'outer reconnect;
                             }
@@ -93,15 +92,17 @@ pub async fn websocket_handler(
                         _ => continue 'outer,
                     };
 
-                    let handle_frame = |result| {
-                        let (frame, frame_id) = match result {
+                    let _ = decode_frames(&data, protocol, |result| {
+                        let raw_frame: RawReply = match result {
                             Ok(data) => data,
                             Err(err) => {
-                                log::debug!("failed to parse frame: {}", err);
                                 on_error(err);
-                                return;
+                                return Ok(());
                             }
                         };
+
+                        let frame_id = raw_frame.id;
+                        let frame: Reply = raw_frame.into();
 
                         if let Reply::Empty = frame {
                             let _ = ping_write.try_send(());
@@ -120,55 +121,9 @@ pub async fn websocket_handler(
                                 }
                             }
                         }
-                    };
 
-                    match protocol {
-                        Protocol::Json => {
-                            for line in data.lines() {
-                                let line = match line {
-                                    Ok(line) => line,
-                                    Err(err) => {
-                                        log::debug!("failed to read line: {}", err);
-                                        on_error(anyhow!(err));
-                                        continue;
-                                    }
-                                };
-
-                                log::trace!("<-- {}", line);
-
-                                let result = (|| -> Result<(Reply, u32), anyhow::Error> {
-                                    let frame: RawReply = serde_json::from_str(&line)?;
-                                    let frame_id = frame.id;
-                                    let frame: Reply = frame.into();
-                                    Ok((frame, frame_id))
-                                })();
-
-                                handle_frame(result);
-                            }
-                        }
-                        Protocol::Protobuf => {
-                            let mut data = &data[..];
-
-                            while !data.is_empty() {
-                                let Ok(len) = prost::decode_length_delimiter(data) else {
-                                    break;
-                                };
-                                let len_delimiter_len = prost::length_delimiter_len(len);
-                                log::trace!("<-- {}", format_protobuf(&data[..len_delimiter_len + len]));
-                                data = &data[len_delimiter_len..];
-
-                                let result = (|| -> Result<(Reply, u32), anyhow::Error> {
-                                    let frame = RawReply::decode(&data[..len])?;
-                                    let frame_id = frame.id;
-                                    let frame: Reply = frame.into();
-                                    Ok((frame, frame_id))
-                                })();
-
-                                data = &data[len..];
-                                handle_frame(result);
-                            }
-                        }
-                    }
+                        Ok(())
+                    });
                 }
             }
         };
@@ -189,7 +144,7 @@ pub async fn websocket_handler(
 
                 ping = ping_read.recv() => {
                     if ping.is_some() {
-                        let message = encode_commands(&[RawCommand::from(Command::Empty)], protocol, |_, _| {});
+                        let message = encode_frames(&[RawCommand::from(Command::Empty)], protocol, |_, _| {});
                         if let Some(message) = message {
                             match write_ws.send(message).await {
                                 Ok(()) => (),
@@ -250,8 +205,9 @@ pub async fn websocket_handler(
                     }
 
                     if !commands.is_empty() {
-                        let message = encode_commands(&commands, protocol, |id, error| {
+                        let message = encode_frames(&commands, protocol, |id, error| {
                             let mut map = reply_map.map.lock().unwrap();
+                            let Some(id) = commands.get(id).map(|c| c.id) else { return; };
                             if let Some((ch, abort_handle)) = map.remove(&id) {
                                 let _ = ch.send(Err(error));
                                 abort_handle.map(|h| h.abort());
@@ -296,53 +252,5 @@ pub async fn websocket_handler(
         let reconnect = false;
         log::debug!("websocket connection aborted, reconnect={}", reconnect);
         reconnect
-    }
-}
-
-fn format_protobuf(buf: &[u8]) -> String {
-    fn buf_to_hex(buf: &[u8]) -> String {
-        buf.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
-    }
-
-    let Ok(len) = prost::decode_length_delimiter(buf) else {
-        return buf_to_hex(buf);
-    };
-    let len_delimiter_len = prost::length_delimiter_len(len);
-
-    format!("{} {}", buf_to_hex(&buf[..len_delimiter_len]), buf_to_hex(&buf[len_delimiter_len..]))
-}
-
-fn encode_commands(commands: &[RawCommand], protocol: Protocol, mut on_error: impl FnMut(u32, ReplyError)) -> Option<Message> {
-    match protocol {
-        Protocol::Json => {
-            let mut lines = Vec::with_capacity(commands.len());
-            for command in commands.iter() {
-                match serde_json::to_string(command) {
-                    Ok(line) => {
-                        log::trace!("--> {}", &line);
-                        lines.push(line);
-                    }
-                    Err(err) => {
-                        on_error(command.id, ReplyError::InappropriateProtocol);
-                        log::debug!("failed to encode command: {:?}", err);
-                    }
-                }
-            }
-
-            if lines.is_empty() {
-                None
-            } else {
-                Some(Message::Text(lines.join("\n")))
-            }
-        }
-        Protocol::Protobuf => {
-            let mut buf = Vec::new();
-            for command in commands.iter() {
-                let buf_len = buf.len();
-                command.encode_length_delimited(&mut buf).unwrap();
-                log::trace!("--> {}", format_protobuf(&buf[buf_len..]));
-            }
-            Some(Message::Binary(buf))
-        }
     }
 }
