@@ -83,7 +83,7 @@ pub async fn websocket_handler(
                             if let Some(close_frame) = close_frame {
                                 let code: u16 = close_frame.code.into();
                                 let reason = close_frame.reason;
-                                let reconnect = crate::errors::ErrorCode(code).should_reconnect();
+                                let reconnect = crate::errors::DisconnectErrorCode(code).should_reconnect();
                                 log::debug!("connection closed by remote, code={code}, reason={reason}");
                                 break 'outer reconnect;
                             }
@@ -144,7 +144,7 @@ pub async fn websocket_handler(
 
                 ping = ping_read.recv() => {
                     if ping.is_some() {
-                        let message = encode_frames(&[RawCommand::from(Command::Empty)], protocol, |_, _| {});
+                        let message = encode_frames(&[RawCommand::from(Command::Empty)], protocol, |_| {});
                         if let Some(message) = message {
                             match write_ws.send(message).await {
                                 Ok(()) => (),
@@ -205,11 +205,11 @@ pub async fn websocket_handler(
                     }
 
                     if !commands.is_empty() {
-                        let message = encode_frames(&commands, protocol, |id, error| {
+                        let message = encode_frames(&commands, protocol, |id| {
                             let mut map = reply_map.map.lock().unwrap();
                             let Some(id) = commands.get(id).map(|c| c.id) else { return; };
                             if let Some((ch, abort_handle)) = map.remove(&id) {
-                                let _ = ch.send(Err(error));
+                                let _ = ch.send(Err(ReplyError::InappropriateProtocol));
                                 abort_handle.map(|h| h.abort());
                             }
                         });

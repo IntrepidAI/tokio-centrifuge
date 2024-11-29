@@ -197,7 +197,7 @@ pub struct ClientInfo {
 #[serde(default, rename_all = "camelCase")]
 pub struct Publication {
     #[prost(bytes = "vec", tag = "4")]
-    #[serde(deserialize_with = "super::deserialize_json")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(message, optional, tag = "5")]
@@ -514,7 +514,7 @@ pub struct PublishRequest {
     #[serde(skip_serializing_if = "super::is_default")]
     pub channel: String,
     #[prost(bytes = "vec", tag = "2")]
-    #[serde(serialize_with = "super::serialize_json")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
@@ -612,7 +612,7 @@ pub struct PingResult {}
 #[serde(default, rename_all = "camelCase")]
 pub struct RpcRequest {
     #[prost(bytes = "vec", tag = "1")]
-    #[serde(deserialize_with = "super::deserialize_json")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(string, tag = "2")]
@@ -624,6 +624,7 @@ pub struct RpcRequest {
 #[serde(default, rename_all = "camelCase")]
 pub struct RpcResult {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }

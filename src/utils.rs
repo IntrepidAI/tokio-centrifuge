@@ -3,9 +3,10 @@ use std::io::BufRead;
 use anyhow::anyhow;
 use async_tungstenite::tungstenite::Message;
 use prost::Message as ProstMessage;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
-use crate::{client_handler::ReplyError, config::Protocol};
+use crate::config::Protocol;
 
 pub fn decode_frames<T: DeserializeOwned + ProstMessage + Default>(
     data: &[u8],
@@ -73,7 +74,7 @@ fn decode_frames_protobuf<T: ProstMessage + Default>(
 pub fn encode_frames<T: Serialize + ProstMessage>(
     commands: &[T],
     protocol: Protocol,
-    mut on_error: impl FnMut(usize, ReplyError),
+    mut on_encode_error: impl FnMut(usize),
 ) -> Option<Message> {
     match protocol {
         Protocol::Json => {
@@ -85,7 +86,7 @@ pub fn encode_frames<T: Serialize + ProstMessage>(
                         lines.push(line);
                     }
                     Err(err) => {
-                        on_error(idx, ReplyError::InappropriateProtocol);
+                        on_encode_error(idx);
                         log::debug!("failed to encode command: {:?}", err);
                     }
                 }

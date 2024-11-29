@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::Display;
 
 use async_tungstenite::tungstenite::protocol::CloseFrame;
@@ -11,10 +10,77 @@ pub enum RemoveSubscriptionError {
 }
 
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ErrorCode(pub u16);
+pub struct ClientErrorCode(pub u16);
 
 #[allow(non_upper_case_globals)]
-impl ErrorCode {
+impl ClientErrorCode {
+    pub const Internal:              Self = Self(100);
+    pub const Unauthorized:          Self = Self(101);
+    pub const UnknownChannel:        Self = Self(102);
+    pub const PermissionDenied:      Self = Self(103);
+    pub const MethodNotFound:        Self = Self(104);
+    pub const AlreadySubscribed:     Self = Self(105);
+    pub const LimitExceeded:         Self = Self(106);
+    pub const BadRequest:            Self = Self(107);
+    pub const NotAvailable:          Self = Self(108);
+    pub const TokenExpired:          Self = Self(109);
+    pub const Expired:               Self = Self(110);
+    pub const TooManyRequests:       Self = Self(111);
+    pub const UnrecoverablePosition: Self = Self(112);
+
+    pub fn is_temporary(self) -> bool {
+        matches!(self, Self::Internal | Self::TooManyRequests)
+    }
+}
+
+impl Display for ClientErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            100 => write!(f, "internal server error"),
+            101 => write!(f, "unauthorized"),
+            102 => write!(f, "unknown channel"),
+            103 => write!(f, "permission denied"),
+            104 => write!(f, "method not found"),
+            105 => write!(f, "already subscribed"),
+            106 => write!(f, "limit exceeded"),
+            107 => write!(f, "bad request"),
+            108 => write!(f, "not available"),
+            109 => write!(f, "token expired"),
+            110 => write!(f, "expired"),
+            111 => write!(f, "too many requests"),
+            112 => write!(f, "unrecoverable position"),
+            _ => write!(f, "unknown code {}", self.0),
+        }
+    }
+}
+
+impl From<ClientErrorCode> for u16 {
+    fn from(code: ClientErrorCode) -> Self {
+        code.0
+    }
+}
+
+impl From<u16> for ClientErrorCode {
+    fn from(code: u16) -> Self {
+        Self(code)
+    }
+}
+
+impl From<ClientErrorCode> for crate::protocol::Error {
+    fn from(code: ClientErrorCode) -> Self {
+        Self {
+            code: code.0.into(),
+            message: code.to_string(),
+            temporary: code.is_temporary(),
+        }
+    }
+}
+
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisconnectErrorCode(pub u16);
+
+#[allow(non_upper_case_globals)]
+impl DisconnectErrorCode {
     pub const ConnectionClosed:       Self = Self(3000);
     pub const Shutdown:               Self = Self(3001);
     pub const ServerError:            Self = Self(3004);
@@ -40,36 +106,9 @@ impl ErrorCode {
     pub fn should_reconnect(self) -> bool {
         !matches!(self.0, 3500..=3999 | 4500..=4999)
     }
-
-    pub fn to_str(self) -> Cow<'static, str> {
-        match self.0 {
-            3000 => Cow::Borrowed("connection closed"),
-            3001 => Cow::Borrowed("shutdown"),
-            3004 => Cow::Borrowed("internal server error"),
-            3005 => Cow::Borrowed("connection expired"),
-            3006 => Cow::Borrowed("subscription expired"),
-            3008 => Cow::Borrowed("slow"),
-            3009 => Cow::Borrowed("write error"),
-            3010 => Cow::Borrowed("insufficient state"),
-            3011 => Cow::Borrowed("force reconnect"),
-            3012 => Cow::Borrowed("no pong"),
-            3013 => Cow::Borrowed("too many requests"),
-            3500 => Cow::Borrowed("invalid token"),
-            3501 => Cow::Borrowed("bad request"),
-            3502 => Cow::Borrowed("stale"),
-            3503 => Cow::Borrowed("force disconnect"),
-            3504 => Cow::Borrowed("connection limit"),
-            3505 => Cow::Borrowed("channel limit"),
-            3506 => Cow::Borrowed("inappropriate protocol"),
-            3507 => Cow::Borrowed("permission denied"),
-            3508 => Cow::Borrowed("not available"),
-            3509 => Cow::Borrowed("too many errors"),
-            _ => Cow::Owned(format!("unknown code {}", self.0)),
-        }
-    }
 }
 
-impl Display for ErrorCode {
+impl Display for DisconnectErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
             3000 => write!(f, "connection closed"),
@@ -98,20 +137,20 @@ impl Display for ErrorCode {
     }
 }
 
-impl From<ErrorCode> for u16 {
-    fn from(code: ErrorCode) -> Self {
+impl From<DisconnectErrorCode> for u16 {
+    fn from(code: DisconnectErrorCode) -> Self {
         code.0
     }
 }
 
-impl From<u16> for ErrorCode {
+impl From<u16> for DisconnectErrorCode {
     fn from(code: u16) -> Self {
         Self(code)
     }
 }
 
-impl From<ErrorCode> for Option<CloseFrame<'_>> {
-    fn from(code: ErrorCode) -> Self {
+impl From<DisconnectErrorCode> for Option<CloseFrame<'_>> {
+    fn from(code: DisconnectErrorCode) -> Self {
         Some(CloseFrame {
             code: code.0.into(),
             reason: code.to_string().into(),
