@@ -5,14 +5,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_tungstenite::tungstenite::Message;
-use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
+use futures::{AsyncRead, AsyncWrite, SinkExt, Stream, StreamExt};
 use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use crate::config::Protocol;
 use crate::errors::{ClientErrorCode, DisconnectErrorCode};
-use crate::protocol::{Command, ConnectResult, RawCommand, RawReply, Reply, RpcResult};
+use crate::protocol::{
+    Command, ConnectResult, Publication, Push, PushData, RawCommand, RawReply, Reply, RpcResult,
+    SubscribeResult, UnsubscribeResult,
+};
 use crate::utils::{decode_frames, encode_frames};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
@@ -29,7 +32,9 @@ struct ServerSession {
     state: SessionState,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
-    rpc_tasks: JoinSet<()>,
+    sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
+    subscriptions: HashMap<String, AbortHandle>,
+    tasks: JoinSet<()>,
     reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
 }
 
@@ -37,6 +42,7 @@ impl ServerSession {
     fn new(
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
+        sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
@@ -44,12 +50,16 @@ impl ServerSession {
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             rpc_methods,
-            rpc_tasks: JoinSet::new(),
+            sub_channels,
+            subscriptions: HashMap::new(),
+            tasks: JoinSet::new(),
             reply_ch,
         }
     }
 
     async fn process_command(&mut self, id: u32, command: Command) {
+        const MAX_SUBSCRIPTION_COUNT: usize = 128;
+
         match self.state {
             SessionState::Initial => {
                 match command {
@@ -78,31 +88,81 @@ impl ServerSession {
                     Command::Rpc(rpc_request) => {
                         let f = {
                             let methods = self.rpc_methods.lock().unwrap();
-                            methods.get(rpc_request.method.as_str()).cloned()
+                            methods.get(&rpc_request.method).cloned()
                         };
 
-                        if let Some(f) = f {
-                            let permit = self.rpc_semaphore.clone().acquire_owned().await;
-                            let reply_ch = self.reply_ch.clone();
-                            self.rpc_tasks.spawn(async move {
-                                let result = f(rpc_request.data).await;
-                                match result {
-                                    Ok(data) => {
-                                        let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
-                                    }
-                                    Err((code, message)) => {
-                                        let _ = reply_ch.send(Ok((id, Reply::Error(crate::protocol::Error {
-                                            code: code.0.into(),
-                                            message,
-                                            temporary: code.is_temporary(),
-                                        })))).await;
-                                    }
-                                }
-                                drop(permit);
-                            });
-                        } else {
+                        let Some(f) = f else {
                             let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::MethodNotFound.into())))).await;
+                            return;
+                        };
+
+                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
+                        let reply_ch = self.reply_ch.clone();
+                        self.tasks.spawn(async move {
+                            let result = f(rpc_request.data).await;
+                            match result {
+                                Ok(data) => {
+                                    let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
+                                }
+                                Err((code, message)) => {
+                                    let _ = reply_ch.send(Ok((id, Reply::Error(crate::protocol::Error {
+                                        code: code.0.into(),
+                                        message,
+                                        temporary: code.is_temporary(),
+                                    })))).await;
+                                }
+                            }
+                            drop(permit);
+                        });
+                    }
+                    Command::Subscribe(sub_request) => {
+                        if self.subscriptions.contains_key(&sub_request.channel) {
+                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::AlreadySubscribed.into())))).await;
+                            return;
                         }
+
+                        if self.subscriptions.len() >= MAX_SUBSCRIPTION_COUNT {
+                            log::warn!("subscription limit exceeded");
+                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::LimitExceeded.into())))).await;
+                            return;
+                        }
+
+                        let f = {
+                            let methods = self.sub_channels.lock().unwrap();
+                            methods.get(&sub_request.channel).cloned()
+                        };
+
+                        let Some(f) = f else {
+                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::UnknownChannel.into())))).await;
+                            return;
+                        };
+
+                        let reply_ch = self.reply_ch.clone();
+                        let channel_name = sub_request.channel.clone();
+
+                        let abort_handle = self.tasks.spawn(async move {
+                            let mut stream = f();
+
+                            while let Some(data) = stream.next().await {
+                                let _ = reply_ch.send(Ok((0, Reply::Push(Push {
+                                    channel: channel_name.clone(),
+                                    data: PushData::Publication(Publication {
+                                        data,
+                                        ..Default::default()
+                                    }),
+                                })))).await;
+                            }
+                        });
+                        self.subscriptions.insert(sub_request.channel, abort_handle);
+
+                        let _ = self.reply_ch.send(Ok((id, Reply::Subscribe(SubscribeResult::default())))).await;
+                    }
+                    Command::Unsubscribe(unsub_request) => {
+                        if let Some(abort_handle) = self.subscriptions.remove(&unsub_request.channel) {
+                            abort_handle.abort();
+                        }
+
+                        let _ = self.reply_ch.send(Ok((id, Reply::Unsubscribe(UnsubscribeResult::default())))).await;
                     }
                     _ => {
                         let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::NotAvailable.into())))).await;
@@ -124,9 +184,12 @@ type RpcMethodFn = Arc<
     + Send + Sync
 >;
 
+type ChannelFn = Arc<dyn Fn() -> Pin<Box<dyn Stream<Item = Vec<u8>> + Send>> + Send + Sync>;
+
 #[derive(Default, Clone)]
 pub struct Server {
     rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
+    sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
 }
 
 impl Server {
@@ -169,6 +232,29 @@ impl Server {
         self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f);
     }
 
+    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn() -> St + Send + Sync + 'static)
+    where
+        St: Stream<Item = T> + Send + 'static,
+        T: serde::Serialize + Send + 'static,
+    {
+        let f = Arc::new(f);
+        let wrap_f: ChannelFn = Arc::new(move || {
+            let stream = f();
+            let result = stream.filter_map(|item| async move {
+                let data = match serde_json::to_vec(&item) {
+                    Ok(data) => data,
+                    Err(err) => {
+                        log::error!("failed to serialize channel item: {}", err);
+                        return None;
+                    }
+                };
+                Some(data)
+            });
+            Box::pin(result)
+        });
+        self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f);
+    }
+
     pub async fn accept_async<S>(&self, stream: S, protocol: Protocol) -> anyhow::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -181,6 +267,7 @@ impl Server {
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let rpc_methods = self.rpc_methods.clone();
+        let sub_channels = self.sub_channels.clone();
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);
 
         let reader_task = tokio::spawn(async move {
@@ -190,6 +277,7 @@ impl Server {
             let mut session = ServerSession::new(
                 reply_ch_tx.clone(),
                 rpc_methods,
+                sub_channels,
             );
 
             let error_code = 'outer: loop {
