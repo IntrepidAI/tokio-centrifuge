@@ -76,8 +76,9 @@ async fn main() {
         log::info!("accepted connection from: {}", addr);
         let server = server.clone();
         tokio::task::spawn(async move {
-            let _ = server.accept_async(stream, tokio_centrifuge::config::Protocol::Json).await
-                .map_err(|err| log::error!("error: {:?}", err));
+            let Ok(stream) = async_tungstenite::accept_async(stream).await
+                .map_err(|err| log::error!("error: {:?}", err)) else { return };
+            server.serve(stream, tokio_centrifuge::config::Protocol::Json).await;
             log::info!("closed connection with: {}", addr);
         });
     }

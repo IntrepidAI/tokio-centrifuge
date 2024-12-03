@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_tungstenite::tungstenite::Message;
-use futures::{AsyncRead, AsyncWrite, SinkExt, Stream, StreamExt};
+use async_tungstenite::tungstenite::{Error as WsError, Message};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
@@ -255,12 +255,11 @@ impl Server {
         self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f);
     }
 
-    pub async fn accept_async<S>(&self, stream: S, protocol: Protocol) -> anyhow::Result<()>
+    pub async fn serve<S>(&self, stream: S, protocol: Protocol)
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
     {
-        let websocket = async_tungstenite::accept_async(stream).await?;
-        let (mut write_ws, mut read_ws) = websocket.split();
+        let (mut write_ws, mut read_ws) = stream.split();
         let (closer_tx, mut closer_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         let mut ping_timer = tokio::time::interval(PING_INTERVAL);
@@ -406,11 +405,9 @@ impl Server {
 
         if let (Ok(read_ws), Ok(write_ws)) = (read_ws, write_ws) {
             let mut stream = read_ws.reunite(write_ws).unwrap();
-            let _ = stream.close(None).await;
+            let _ = stream.close().await;
         } else {
             log::debug!("failed to join reader and writer tasks");
         }
-
-        Ok(())
     }
 }
