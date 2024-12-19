@@ -69,8 +69,11 @@ async fn main() {
     }).unwrap();
 
     server.add_channel("test_channel", |_| {
+        // if true {
+        //     return Err(ClientErrorCode::PermissionDenied.into());
+        // }
         log::debug!("channel test_channel connected");
-        TestStream::new(Duration::from_millis(500))
+        Ok(TestStream::new(Duration::from_millis(500)))
     }).unwrap();
 
     while let Ok((stream, addr)) = listener.accept().await {

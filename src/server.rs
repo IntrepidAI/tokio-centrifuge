@@ -12,7 +12,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
 use crate::config::Protocol;
-use crate::errors::{ClientErrorCode, DisconnectErrorCode};
+use crate::errors::{ClientError, ClientErrorCode, DisconnectErrorCode};
 use crate::protocol::{
     Command, ConnectResult, Publication, Push, PushData, RawCommand, RawReply, Reply, RpcResult,
     SubscribeResult, UnsubscribeResult,
@@ -95,11 +95,9 @@ impl ServerSession {
                             match methods.at(&rpc_request.method) {
                                 Ok(match_) => {
                                     let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
-                                    dbg!(&params);
                                     Some((params, match_.value.clone()))
                                 }
                                 Err(_err) => {
-                                    dbg!("wtff");
                                     None
                                 }
                             }
@@ -118,12 +116,8 @@ impl ServerSession {
                                 Ok(data) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
                                 }
-                                Err((code, message)) => {
-                                    let _ = reply_ch.send(Ok((id, Reply::Error(crate::protocol::Error {
-                                        code: code.0.into(),
-                                        message,
-                                        temporary: code.is_temporary(),
-                                    })))).await;
+                                Err(err) => {
+                                    let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
                                 }
                             }
                             drop(permit);
@@ -160,10 +154,17 @@ impl ServerSession {
                         let reply_ch = self.reply_ch.clone();
                         let channel_name = sub_request.channel.clone();
                         let client_id = self.client_id;
-                        let abort_handle = self.tasks.spawn(async move {
-                            let (match_params, f) = match_;
-                            let mut stream = f(Context { client_id, params: match_params });
 
+                        let (match_params, f) = match_;
+                        let mut stream = match f(Context { client_id, params: match_params }) {
+                            Ok(stream) => stream,
+                            Err(err) => {
+                                let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
+                                return;
+                            }
+                        };
+
+                        let abort_handle = self.tasks.spawn(async move {
                             while let Some(data) = stream.next().await {
                                 let _ = reply_ch.send(Ok((0, Reply::Push(Push {
                                     channel: channel_name.clone(),
@@ -206,11 +207,15 @@ pub struct Context {
 
 type RpcMethodFn = Arc<
     dyn Fn(Context, Vec<u8>) ->
-        Pin<Box<dyn Future<Output = Result<Vec<u8>, (ClientErrorCode, String)>> + Send>>
+        Pin<Box<dyn Future<Output = Result<Vec<u8>, ClientError>> + Send>>
     + Send + Sync
 >;
 
-type ChannelFn = Arc<dyn Fn(Context) -> Pin<Box<dyn Stream<Item = Vec<u8>> + Send>> + Send + Sync>;
+type ChannelFn = Arc<
+    dyn Fn(Context) ->
+        Result<Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>, ClientError>
+    + Send + Sync
+>;
 
 #[derive(Default, Clone)]
 pub struct Server {
@@ -228,7 +233,7 @@ impl Server {
     where
         In: serde::de::DeserializeOwned,
         Out: serde::Serialize,
-        Fut: std::future::Future<Output = anyhow::Result<Out>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<Out, ClientError>> + Send + 'static,
     {
         let f = Arc::new(f);
         let wrap_f: RpcMethodFn = Arc::new(move |ctx: Context, data: Vec<u8>| {
@@ -236,20 +241,15 @@ impl Server {
             Box::pin(async move {
                 let data = match serde_json::from_slice(&data) {
                     Ok(data) => data,
-                    Err(err) => {
-                        return Err((ClientErrorCode::BadRequest, err.to_string()));
+                    Err(_err) => {
+                        return Err(ClientErrorCode::BadRequest.into());
                     }
                 };
-                let result = match f(ctx, data).await {
-                    Ok(result) => result,
-                    Err(err) => {
-                        return Err((ClientErrorCode::Internal, err.to_string()));
-                    }
-                };
+                let result = f(ctx, data).await?;
                 let bytes = match serde_json::to_vec(&result) {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        return Err((ClientErrorCode::Internal, err.to_string()));
+                        return Err(ClientError::internal(err.to_string()));
                     }
                 };
                 Ok(bytes)
@@ -258,14 +258,14 @@ impl Server {
         self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
-    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn(Context) -> St + Send + Sync + 'static) -> Result<(), InsertError>
+    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn(Context) -> Result<St, ClientError> + Send + Sync + 'static) -> Result<(), InsertError>
     where
         St: Stream<Item = T> + Send + 'static,
         T: serde::Serialize + Send + 'static,
     {
         let f = Arc::new(f);
         let wrap_f: ChannelFn = Arc::new(move |ctx: Context| {
-            let stream = f(ctx);
+            let stream = f(ctx)?;
             let result = stream.filter_map(|item| async move {
                 let data = match serde_json::to_vec(&item) {
                     Ok(data) => data,
@@ -276,7 +276,7 @@ impl Server {
                 };
                 Some(data)
             });
-            Box::pin(result)
+            Ok(Box::pin(result))
         });
         self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
     }

@@ -9,6 +9,49 @@ pub enum RemoveSubscriptionError {
     NotUnsubscribed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientError {
+    pub code: ClientErrorCode,
+    pub message: String,
+}
+
+impl From<anyhow::Error> for ClientError {
+    fn from(err: anyhow::Error) -> Self {
+        Self {
+            code: ClientErrorCode::Internal,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<ClientError> for crate::protocol::Error {
+    fn from(err: ClientError) -> Self {
+        Self {
+            code: err.code.0.into(),
+            message: err.message,
+            temporary: err.code.is_temporary(),
+        }
+    }
+}
+
+impl ClientError {
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            code: ClientErrorCode::Internal,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<ClientErrorCode> for ClientError {
+    fn from(code: ClientErrorCode) -> Self {
+        Self {
+            code,
+            message: code.to_string(),
+        }
+    }
+}
+
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientErrorCode(pub u16);
 
