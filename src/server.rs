@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_tungstenite::tungstenite::{Error as WsError, Message};
 use futures::{Sink, SinkExt, Stream, StreamExt};
+use matchit::{InsertError, Router};
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
@@ -29,10 +30,11 @@ enum SessionState {
 }
 
 struct ServerSession {
+    client_id: uuid::Uuid,
     state: SessionState,
     rpc_semaphore: Arc<Semaphore>,
-    rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
-    sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
+    rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
+    sub_channels: Arc<Mutex<Router<ChannelFn>>>,
     subscriptions: HashMap<String, AbortHandle>,
     tasks: JoinSet<()>,
     reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
@@ -40,13 +42,15 @@ struct ServerSession {
 
 impl ServerSession {
     fn new(
+        client_id: uuid::Uuid,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
-        rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
-        sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
+        rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
+        sub_channels: Arc<Mutex<Router<ChannelFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
+            client_id,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             rpc_methods,
@@ -67,7 +71,7 @@ impl ServerSession {
                         log::debug!("connection established with name={}, version={}", connect.name, connect.version);
                         self.state = SessionState::Connected;
                         let _ = self.reply_ch.send(Ok((id, Reply::Connect(ConnectResult {
-                            client: uuid::Uuid::new_v4().to_string(),
+                            client: self.client_id.as_hyphenated().to_string(),
                             ping: PING_INTERVAL.as_secs() as u32,
                             pong: true,
                             ..Default::default()
@@ -86,20 +90,30 @@ impl ServerSession {
                         let _ = self.reply_ch.send(Err(DisconnectErrorCode::BadRequest)).await;
                     }
                     Command::Rpc(rpc_request) => {
-                        let f = {
+                        let Some(match_) = ({
                             let methods = self.rpc_methods.lock().unwrap();
-                            methods.get(&rpc_request.method).cloned()
-                        };
-
-                        let Some(f) = f else {
+                            match methods.at(&rpc_request.method) {
+                                Ok(match_) => {
+                                    let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+                                    dbg!(&params);
+                                    Some((params, match_.value.clone()))
+                                }
+                                Err(_err) => {
+                                    dbg!("wtff");
+                                    None
+                                }
+                            }
+                        }) else {
                             let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::MethodNotFound.into())))).await;
                             return;
                         };
 
                         let permit = self.rpc_semaphore.clone().acquire_owned().await;
                         let reply_ch = self.reply_ch.clone();
+                        let client_id = self.client_id;
                         self.tasks.spawn(async move {
-                            let result = f(rpc_request.data).await;
+                            let (match_params, f) = match_;
+                            let result = f(Context { client_id, params: match_params }, rpc_request.data).await;
                             match result {
                                 Ok(data) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
@@ -127,21 +141,28 @@ impl ServerSession {
                             return;
                         }
 
-                        let f = {
+                        let Some(match_) = ({
                             let methods = self.sub_channels.lock().unwrap();
-                            methods.get(&sub_request.channel).cloned()
-                        };
-
-                        let Some(f) = f else {
+                            match methods.at(&sub_request.channel) {
+                                Ok(match_) => {
+                                    let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+                                    Some((params, match_.value.clone()))
+                                }
+                                Err(_err) => {
+                                    None
+                                }
+                            }
+                        }) else {
                             let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::UnknownChannel.into())))).await;
                             return;
                         };
 
                         let reply_ch = self.reply_ch.clone();
                         let channel_name = sub_request.channel.clone();
-
+                        let client_id = self.client_id;
                         let abort_handle = self.tasks.spawn(async move {
-                            let mut stream = f();
+                            let (match_params, f) = match_;
+                            let mut stream = f(Context { client_id, params: match_params });
 
                             while let Some(data) = stream.next().await {
                                 let _ = reply_ch.send(Ok((0, Reply::Push(Push {
@@ -178,18 +199,23 @@ impl ServerSession {
     }
 }
 
+pub struct Context {
+    pub client_id: uuid::Uuid,
+    pub params: HashMap<String, String>,
+}
+
 type RpcMethodFn = Arc<
-    dyn Fn(Vec<u8>) ->
+    dyn Fn(Context, Vec<u8>) ->
         Pin<Box<dyn Future<Output = Result<Vec<u8>, (ClientErrorCode, String)>> + Send>>
     + Send + Sync
 >;
 
-type ChannelFn = Arc<dyn Fn() -> Pin<Box<dyn Stream<Item = Vec<u8>> + Send>> + Send + Sync>;
+type ChannelFn = Arc<dyn Fn(Context) -> Pin<Box<dyn Stream<Item = Vec<u8>> + Send>> + Send + Sync>;
 
 #[derive(Default, Clone)]
 pub struct Server {
-    rpc_methods: Arc<Mutex<HashMap<String, RpcMethodFn>>>,
-    sub_channels: Arc<Mutex<HashMap<String, ChannelFn>>>,
+    rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
+    sub_channels: Arc<Mutex<Router<ChannelFn>>>,
 }
 
 impl Server {
@@ -198,14 +224,14 @@ impl Server {
     }
 
     // pub fn add_rpc_method<T, R>(&self, name: &str, f: impl Fn(T) -> anyhow::Result<R> + Send + Sync + 'static)
-    pub fn add_rpc_method<In, Out, Fut>(&self, name: &str, f: impl Fn(In) -> Fut + Send + Sync + 'static)
+    pub fn add_rpc_method<In, Out, Fut>(&self, name: &str, f: impl Fn(Context, In) -> Fut + Send + Sync + 'static) -> Result<(), InsertError>
     where
         In: serde::de::DeserializeOwned,
         Out: serde::Serialize,
         Fut: std::future::Future<Output = anyhow::Result<Out>> + Send + 'static,
     {
         let f = Arc::new(f);
-        let wrap_f: RpcMethodFn = Arc::new(move |data: Vec<u8>| {
+        let wrap_f: RpcMethodFn = Arc::new(move |ctx: Context, data: Vec<u8>| {
             let f = f.clone();
             Box::pin(async move {
                 let data = match serde_json::from_slice(&data) {
@@ -214,7 +240,7 @@ impl Server {
                         return Err((ClientErrorCode::BadRequest, err.to_string()));
                     }
                 };
-                let result = match f(data).await {
+                let result = match f(ctx, data).await {
                     Ok(result) => result,
                     Err(err) => {
                         return Err((ClientErrorCode::Internal, err.to_string()));
@@ -229,17 +255,17 @@ impl Server {
                 Ok(bytes)
             })
         });
-        self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f);
+        self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
-    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn() -> St + Send + Sync + 'static)
+    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn(Context) -> St + Send + Sync + 'static) -> Result<(), InsertError>
     where
         St: Stream<Item = T> + Send + 'static,
         T: serde::Serialize + Send + 'static,
     {
         let f = Arc::new(f);
-        let wrap_f: ChannelFn = Arc::new(move || {
-            let stream = f();
+        let wrap_f: ChannelFn = Arc::new(move |ctx: Context| {
+            let stream = f(ctx);
             let result = stream.filter_map(|item| async move {
                 let data = match serde_json::to_vec(&item) {
                     Ok(data) => data,
@@ -252,13 +278,14 @@ impl Server {
             });
             Box::pin(result)
         });
-        self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f);
+        self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
     pub async fn serve<S>(&self, stream: S, protocol: Protocol)
     where
         S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
     {
+        let client_id = uuid::Uuid::new_v4();
         let (mut write_ws, mut read_ws) = stream.split();
         let (closer_tx, mut closer_rx) = tokio::sync::mpsc::channel::<()>(1);
 
@@ -274,6 +301,7 @@ impl Server {
             let mut timer_expect_pong = Box::pin(tokio::time::sleep(PING_TIMEOUT));
 
             let mut session = ServerSession::new(
+                client_id,
                 reply_ch_tx.clone(),
                 rpc_methods,
                 sub_channels,

@@ -2,7 +2,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use async_std::net::TcpListener;
-use tokio_centrifuge::server::Server;
+use tokio_centrifuge::server::{Context, Server};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -60,17 +60,18 @@ async fn main() {
     }
 
     let server = Server::new();
-    server.add_rpc_method("test", |req: TestRequest| async move {
-        log::debug!("rpc method test called: {:?}", req);
+    server.add_rpc_method("test/{id}", |ctx: Context, req: TestRequest| async move {
+        log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(TestResponse {
             world: req.hello.to_string(),
         })
-    });
+    }).unwrap();
 
-    server.add_channel("test_channel", || {
+    server.add_channel("test_channel", |_| {
+        log::debug!("channel test_channel connected");
         TestStream::new(Duration::from_millis(500))
-    });
+    }).unwrap();
 
     while let Ok((stream, addr)) = listener.accept().await {
         log::info!("accepted connection from: {}", addr);

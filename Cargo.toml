@@ -19,6 +19,7 @@ async-std = { version = "1.13.0", optional = true }
 async-tungstenite = { version = "0.28.0", features = ["tokio-runtime"] }
 futures = "0.3.31"
 log = "0.4.22"
+matchit = "0.8.5"
 prost = "0.13.3"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
