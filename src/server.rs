@@ -15,7 +15,7 @@ use crate::config::Protocol;
 use crate::errors::{ClientError, ClientErrorCode, DisconnectErrorCode};
 use crate::protocol::{
     Command, ConnectResult, Publication, Push, PushData, RawCommand, RawReply, Reply, RpcResult,
-    SubscribeResult, UnsubscribeResult,
+    SubscribeResult, Unsubscribe, UnsubscribeResult,
 };
 use crate::utils::{decode_frames, encode_frames};
 
@@ -29,13 +29,23 @@ enum SessionState {
     //Terminated,
 }
 
+struct Subscription {
+    abort_handle: AbortHandle,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        self.abort_handle.abort();
+    }
+}
+
 struct ServerSession {
     client_id: uuid::Uuid,
     state: SessionState,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
-    subscriptions: HashMap<String, AbortHandle>,
+    subscriptions: Arc<Mutex<HashMap<String, Subscription>>>,
     tasks: JoinSet<()>,
     reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
 }
@@ -55,7 +65,7 @@ impl ServerSession {
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             rpc_methods,
             sub_channels,
-            subscriptions: HashMap::new(),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
             tasks: JoinSet::new(),
             reply_ch,
         }
@@ -124,67 +134,84 @@ impl ServerSession {
                         });
                     }
                     Command::Subscribe(sub_request) => {
-                        if self.subscriptions.contains_key(&sub_request.channel) {
-                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::AlreadySubscribed.into())))).await;
-                            return;
-                        }
+                        let response = (|| {
+                            let mut subscriptions = self.subscriptions.lock().unwrap();
 
-                        if self.subscriptions.len() >= MAX_SUBSCRIPTION_COUNT {
-                            log::warn!("subscription limit exceeded");
-                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::LimitExceeded.into())))).await;
-                            return;
-                        }
-
-                        let Some(match_) = ({
-                            let methods = self.sub_channels.lock().unwrap();
-                            match methods.at(&sub_request.channel) {
-                                Ok(match_) => {
-                                    let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
-                                    Some((params, match_.value.clone()))
-                                }
-                                Err(_err) => {
-                                    None
-                                }
+                            if subscriptions.contains_key(&sub_request.channel) {
+                                return Reply::Error(ClientErrorCode::AlreadySubscribed.into());
                             }
-                        }) else {
-                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::UnknownChannel.into())))).await;
-                            return;
-                        };
 
-                        let reply_ch = self.reply_ch.clone();
-                        let channel_name = sub_request.channel.clone();
-                        let client_id = self.client_id;
-
-                        let (match_params, f) = match_;
-                        let mut stream = match f(Context { client_id, params: match_params }) {
-                            Ok(stream) => stream,
-                            Err(err) => {
-                                let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
-                                return;
+                            if subscriptions.len() >= MAX_SUBSCRIPTION_COUNT {
+                                log::warn!("subscription limit exceeded");
+                                return Reply::Error(ClientErrorCode::LimitExceeded.into());
                             }
-                        };
 
-                        let abort_handle = self.tasks.spawn(async move {
-                            while let Some(data) = stream.next().await {
+                            let Some(match_) = ({
+                                let methods = self.sub_channels.lock().unwrap();
+                                match methods.at(&sub_request.channel) {
+                                    Ok(match_) => {
+                                        let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+                                        Some((params, match_.value.clone()))
+                                    }
+                                    Err(_err) => {
+                                        None
+                                    }
+                                }
+                            }) else {
+                                return Reply::Error(ClientErrorCode::UnknownChannel.into());
+                            };
+
+                            let reply_ch = self.reply_ch.clone();
+                            let channel_name = sub_request.channel.clone();
+                            let client_id = self.client_id;
+
+                            let (match_params, f) = match_;
+                            let mut stream = match f(Context { client_id, params: match_params }) {
+                                Ok(stream) => stream,
+                                Err(err) => {
+                                    return Reply::Error(err.into());
+                                }
+                            };
+
+                            let subscriptions_ = self.subscriptions.clone();
+                            let abort_handle = self.tasks.spawn(async move {
+                                while let Some(data) = stream.next().await {
+                                    let _ = reply_ch.send(Ok((0, Reply::Push(Push {
+                                        channel: channel_name.clone(),
+                                        data: PushData::Publication(Publication {
+                                            data,
+                                            ..Default::default()
+                                        }),
+                                    })))).await;
+                                }
+
+                                subscriptions_.lock().unwrap().remove(&channel_name);
+
                                 let _ = reply_ch.send(Ok((0, Reply::Push(Push {
                                     channel: channel_name.clone(),
-                                    data: PushData::Publication(Publication {
-                                        data,
-                                        ..Default::default()
+                                    data: PushData::Unsubscribe(Unsubscribe {
+                                        code: 2500,
+                                        reason: "channel closed".to_string(),
                                     }),
                                 })))).await;
-                            }
-                        });
-                        self.subscriptions.insert(sub_request.channel, abort_handle);
+                            });
+                            subscriptions.insert(sub_request.channel, Subscription { abort_handle });
 
-                        let _ = self.reply_ch.send(Ok((id, Reply::Subscribe(SubscribeResult::default())))).await;
+                            Reply::Subscribe(SubscribeResult::default())
+                        })();
+
+                        let _ = self.reply_ch.send(Ok((id, response))).await;
                     }
                     Command::Unsubscribe(unsub_request) => {
-                        if let Some(abort_handle) = self.subscriptions.remove(&unsub_request.channel) {
-                            abort_handle.abort();
-                        }
+                        let reply = {
+                            let mut subscriptions = self.subscriptions.lock().unwrap();
+                            if let Some(sub) = subscriptions.remove(&unsub_request.channel) {
+                                sub.abort_handle.abort();
+                            }
+                            Reply::Unsubscribe(UnsubscribeResult::default())
+                        };
 
-                        let _ = self.reply_ch.send(Ok((id, Reply::Unsubscribe(UnsubscribeResult::default())))).await;
+                        let _ = self.reply_ch.send(Ok((id, reply))).await;
                     }
                     _ => {
                         let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::NotAvailable.into())))).await;
