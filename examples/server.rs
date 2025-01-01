@@ -2,7 +2,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use async_std::net::TcpListener;
-use tokio_centrifuge::server::{Context, Server};
+use tokio_centrifuge::{errors::DisconnectErrorCode, server::{AuthContext, Context, Server}};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -32,6 +32,10 @@ impl futures::Stream for TestStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         match self.as_mut().interval.poll_tick(cx) {
             Poll::Ready(_) => {
+                if self.counter == 5 {
+                    return Poll::Ready(None);
+                }
+
                 self.as_mut().counter += 1;
                 Poll::Ready(Some(TestStreamItem { foobar: self.counter }))
             }
@@ -59,7 +63,15 @@ async fn main() {
         world: String,
     }
 
-    let server = Server::new();
+    let mut server = Server::new();
+
+    server.authenticate_with(|ctx: AuthContext| async move {
+        if !ctx.token.is_empty() {
+            return Err(DisconnectErrorCode::InvalidToken);
+        }
+        Ok(())
+    });
+
     server.add_rpc_method("test/{id}", |ctx: Context, req: TestRequest| async move {
         log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;

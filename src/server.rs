@@ -42,6 +42,7 @@ impl Drop for Subscription {
 struct ServerSession {
     client_id: uuid::Uuid,
     state: SessionState,
+    auth_fn: AuthFn,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
@@ -54,12 +55,14 @@ impl ServerSession {
     fn new(
         client_id: uuid::Uuid,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
+        auth_fn: AuthFn,
         rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
         sub_channels: Arc<Mutex<Router<ChannelFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
+            auth_fn,
             client_id,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
@@ -79,6 +82,18 @@ impl ServerSession {
                 match command {
                     Command::Connect(connect) => {
                         log::debug!("connection established with name={}, version={}", connect.name, connect.version);
+                        match (self.auth_fn)(AuthContext {
+                            client_id: self.client_id,
+                            token: connect.token,
+                        }).await {
+                            Ok(()) => (),
+                            Err(err) => {
+                                log::debug!("authentication failed: {:?}", err);
+                                let _ = self.reply_ch.send(Err(err)).await;
+                                return;
+                            }
+                        }
+
                         self.state = SessionState::Connected;
                         let _ = self.reply_ch.send(Ok((id, Reply::Connect(ConnectResult {
                             client: self.client_id.as_hyphenated().to_string(),
@@ -227,10 +242,21 @@ impl ServerSession {
     }
 }
 
+pub struct AuthContext {
+    pub client_id: uuid::Uuid,
+    pub token: String,
+}
+
 pub struct Context {
     pub client_id: uuid::Uuid,
     pub params: HashMap<String, String>,
 }
+
+type AuthFn = Arc<
+    dyn Fn(AuthContext) ->
+        Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
+    + Send + Sync
+>;
 
 type RpcMethodFn = Arc<
     dyn Fn(Context, Vec<u8>) ->
@@ -244,8 +270,27 @@ type ChannelFn = Arc<
     + Send + Sync
 >;
 
+#[derive(Clone)]
+struct AuthFnWrapper(AuthFn);
+
+impl Default for AuthFnWrapper {
+    fn default() -> Self {
+        fn default_auth_fn(ctx: AuthContext) -> Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>> {
+            Box::pin(async move {
+                if !ctx.token.is_empty() {
+                    return Err(DisconnectErrorCode::InvalidToken);
+                }
+                Ok(())
+            })
+        }
+
+        Self(Arc::new(default_auth_fn))
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Server {
+    auth_fn: AuthFnWrapper,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
 }
@@ -253,6 +298,15 @@ pub struct Server {
 impl Server {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn authenticate_with<Fut>(&mut self, f: impl Fn(AuthContext) -> Fut + Send + Sync + 'static)
+    where
+        Fut: std::future::Future<Output = Result<(), DisconnectErrorCode>> + Send + 'static,
+    {
+        self.auth_fn = AuthFnWrapper(Arc::new(move |ctx: AuthContext| {
+            Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
+        }));
     }
 
     // pub fn add_rpc_method<T, R>(&self, name: &str, f: impl Fn(T) -> anyhow::Result<R> + Send + Sync + 'static)
@@ -319,6 +373,7 @@ impl Server {
         let mut ping_timer = tokio::time::interval(PING_INTERVAL);
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let auth_fn = self.auth_fn.0.clone();
         let rpc_methods = self.rpc_methods.clone();
         let sub_channels = self.sub_channels.clone();
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);
@@ -330,6 +385,7 @@ impl Server {
             let mut session = ServerSession::new(
                 client_id,
                 reply_ch_tx.clone(),
+                auth_fn,
                 rpc_methods,
                 sub_channels,
             );
