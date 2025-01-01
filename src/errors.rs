@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use async_tungstenite::tungstenite::protocol::CloseFrame;
 use thiserror::Error;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoveSubscriptionError {
@@ -192,7 +192,7 @@ impl From<u16> for DisconnectErrorCode {
     }
 }
 
-impl From<DisconnectErrorCode> for Option<CloseFrame<'_>> {
+impl From<DisconnectErrorCode> for Option<CloseFrame> {
     fn from(code: DisconnectErrorCode) -> Self {
         Some(CloseFrame {
             code: code.0.into(),

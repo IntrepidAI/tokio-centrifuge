@@ -4,13 +4,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use async_tungstenite::tokio::ConnectStream;
-use async_tungstenite::tungstenite::Message;
-use async_tungstenite::WebSocketStream;
 use futures::{SinkExt, StreamExt};
 use thiserror::Error;
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::config::Protocol;
 use crate::protocol::{Command, RawCommand, RawReply, Reply};
@@ -30,7 +30,7 @@ pub enum ReplyError {
 #[allow(clippy::type_complexity)]
 pub async fn websocket_handler(
     rt: tokio::runtime::Handle,
-    stream: WebSocketStream<ConnectStream>,
+    stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     mut control_ch: mpsc::Receiver<(
         Command,
         oneshot::Sender<Result<Reply, ReplyError>>,
@@ -77,7 +77,7 @@ pub async fn websocket_handler(
                     };
 
                     let data = match message {
-                        Message::Text(text) => text.into_bytes(),
+                        Message::Text(text) => text.into(),
                         Message::Binary(bin) => bin,
                         Message::Close(close_frame) => {
                             if let Some(close_frame) = close_frame {

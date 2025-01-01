@@ -4,13 +4,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use async_tungstenite::tokio::ConnectStream;
-use async_tungstenite::WebSocketStream;
 use futures::Future;
 use slotmap::SlotMap;
+use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
@@ -200,7 +200,7 @@ impl ClientInner {
     fn do_connect<'a>(
         client: &Arc<Mutex<Self>>,
         closer_read: &'a mut mpsc::Receiver<bool>,
-    ) -> impl Future<Output = Result<WebSocketStream<ConnectStream>, bool>> + 'a {
+    ) -> impl Future<Output = Result<WebSocketStream<MaybeTlsStream<TcpStream>>, bool>> + 'a {
         let url = {
             let inner = client.lock().unwrap();
             inner.url.clone()
@@ -210,7 +210,7 @@ impl ClientInner {
         async move {
             let task = async {
                 log::debug!("connecting to {}", &url);
-                match async_tungstenite::tokio::connect_async(&*url).await {
+                match tokio_tungstenite::connect_async(&*url).await {
                     Ok((stream, _)) => Ok(stream),
                     Err(err) => {
                         log::debug!("{err}");
@@ -218,7 +218,7 @@ impl ClientInner {
                         if inner.state != State::Connecting { return Err(false); }
 
                         let do_reconnect = match err {
-                            async_tungstenite::tungstenite::Error::Url(_) => {
+                            tokio_tungstenite::tungstenite::Error::Url(_) => {
                                 // invalid url, don't reconnect
                                 false
                             }
@@ -249,7 +249,7 @@ impl ClientInner {
         client: &Arc<Mutex<Self>>,
         closer_write: mpsc::Sender<bool>,
         closer_read: mpsc::Receiver<bool>,
-        stream: WebSocketStream<ConnectStream>,
+        stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> impl Future<Output = Result<(
         Pin<Box<dyn Future<Output = bool> + Send>>,
         mpsc::Sender<(Command, oneshot::Sender<Result<Reply, ReplyError>>, Duration)>,

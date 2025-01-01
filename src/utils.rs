@@ -1,10 +1,10 @@
 use std::io::BufRead;
 
 use anyhow::anyhow;
-use async_tungstenite::tungstenite::Message;
 use prost::Message as ProstMessage;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::Protocol;
 
@@ -95,7 +95,7 @@ pub fn encode_frames<T: Serialize + ProstMessage>(
             if lines.is_empty() {
                 None
             } else {
-                Some(Message::Text(lines.join("\n")))
+                Some(Message::Text(lines.join("\n").into()))
             }
         }
         Protocol::Protobuf => {
@@ -105,7 +105,7 @@ pub fn encode_frames<T: Serialize + ProstMessage>(
                 command.encode_length_delimited(&mut buf).unwrap();
                 log::trace!("--> {}", format_protobuf(&buf[buf_len..]));
             }
-            Some(Message::Binary(buf))
+            Some(Message::Binary(buf.into()))
         }
     }
 }

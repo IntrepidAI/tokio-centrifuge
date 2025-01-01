@@ -4,12 +4,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_tungstenite::tungstenite::{Error as WsError, Message};
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use matchit::{InsertError, Router};
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use crate::config::Protocol;
 use crate::errors::{ClientError, ClientErrorCode, DisconnectErrorCode};
@@ -412,7 +412,7 @@ impl Server {
                         };
 
                         let data = match message {
-                            Message::Text(text) => text.into_bytes(),
+                            Message::Text(text) => text.into(),
                             Message::Binary(bin) => bin,
                             Message::Close(_close_frame) => {
                                 break 'outer DisconnectErrorCode::ConnectionClosed;

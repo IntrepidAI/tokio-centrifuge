@@ -1,8 +1,9 @@
 use std::task::Poll;
 use std::time::Duration;
 
-use async_std::net::TcpListener;
-use tokio_centrifuge::{errors::DisconnectErrorCode, server::{AuthContext, Context, Server}};
+use tokio::net::TcpListener;
+use tokio_centrifuge::errors::DisconnectErrorCode;
+use tokio_centrifuge::server::{AuthContext, Context, Server};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -92,7 +93,7 @@ async fn main() {
         log::info!("accepted connection from: {}", addr);
         let server = server.clone();
         tokio::task::spawn(async move {
-            let Ok(stream) = async_tungstenite::accept_async(stream).await
+            let Ok(stream) = tokio_tungstenite::accept_async(stream).await
                 .map_err(|err| log::error!("error: {:?}", err)) else { return };
             server.serve(stream, tokio_centrifuge::config::Protocol::Json).await;
             log::info!("closed connection with: {}", addr);
