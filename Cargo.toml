@@ -33,4 +33,5 @@ uuid = { version = "1.11.0", features = ["v4"] }
 default = ["native-tls", "examples"]
 examples = ["tokio/full", "native-tls", "dep:simple_logger", "dep:async-std"]
 native-tls = ["tokio-tungstenite/native-tls"]
-rustls = ["tokio-tungstenite/rustls"]
+rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
+rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
