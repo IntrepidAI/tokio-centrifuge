@@ -66,14 +66,14 @@ async fn main() {
 
     let mut server = Server::new();
 
-    server.authenticate_with(|ctx: AuthContext| async move {
+    server.authenticate_with(async move |ctx: AuthContext| {
         if !ctx.token.is_empty() {
             return Err(DisconnectErrorCode::InvalidToken);
         }
         Ok(())
     });
 
-    server.add_rpc_method("test/{id}", |ctx: Context, req: TestRequest| async move {
+    server.add_rpc_method("test/{id}", async move |ctx: Context, req: TestRequest| {
         log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(TestResponse {

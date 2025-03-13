@@ -347,7 +347,7 @@ impl Server {
         let f = Arc::new(f);
         let wrap_f: ChannelFn = Arc::new(move |ctx: Context| {
             let stream = f(ctx)?;
-            let result = stream.filter_map(|item| async move {
+            let result = stream.filter_map(async move |item| {
                 let data = match serde_json::to_vec(&item) {
                     Ok(data) => data,
                     Err(err) => {
