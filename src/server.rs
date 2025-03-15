@@ -322,8 +322,11 @@ impl Server {
             Box::pin(async move {
                 let data = match serde_json::from_slice(&data) {
                     Ok(data) => data,
-                    Err(_err) => {
-                        return Err(ClientErrorCode::BadRequest.into());
+                    Err(err) => {
+                        return Err(ClientError {
+                            code: ClientErrorCode::BadRequest,
+                            message: err.to_string(),
+                        });
                     }
                 };
                 let result = f(ctx, data).await?;
