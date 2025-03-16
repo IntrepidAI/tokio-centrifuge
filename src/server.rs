@@ -115,6 +115,8 @@ impl ServerSession {
                         let _ = self.reply_ch.send(Err(DisconnectErrorCode::BadRequest)).await;
                     }
                     Command::Rpc(rpc_request) => {
+                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
+
                         let Some(match_) = ({
                             let methods = self.rpc_methods.lock().unwrap();
                             match methods.at(&rpc_request.method) {
@@ -131,7 +133,6 @@ impl ServerSession {
                             return;
                         };
 
-                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
                         let reply_ch = self.reply_ch.clone();
                         let client_id = self.client_id;
                         self.tasks.spawn(async move {
@@ -149,16 +150,18 @@ impl ServerSession {
                         });
                     }
                     Command::Subscribe(sub_request) => {
+                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
+
                         let response = (|| {
                             let mut subscriptions = self.subscriptions.lock().unwrap();
 
                             if subscriptions.contains_key(&sub_request.channel) {
-                                return Reply::Error(ClientErrorCode::AlreadySubscribed.into());
+                                return Some(Reply::Error(ClientErrorCode::AlreadySubscribed.into()));
                             }
 
                             if subscriptions.len() >= MAX_SUBSCRIPTION_COUNT {
                                 log::warn!("subscription limit exceeded");
-                                return Reply::Error(ClientErrorCode::LimitExceeded.into());
+                                return Some(Reply::Error(ClientErrorCode::LimitExceeded.into()));
                             }
 
                             let Some(match_) = ({
@@ -173,23 +176,28 @@ impl ServerSession {
                                     }
                                 }
                             }) else {
-                                return Reply::Error(ClientErrorCode::UnknownChannel.into());
+                                return Some(Reply::Error(ClientErrorCode::UnknownChannel.into()));
                             };
 
                             let reply_ch = self.reply_ch.clone();
                             let channel_name = sub_request.channel.clone();
                             let client_id = self.client_id;
 
-                            let (match_params, f) = match_;
-                            let mut stream = match f(Context { client_id, params: match_params }) {
-                                Ok(stream) => stream,
-                                Err(err) => {
-                                    return Reply::Error(err.into());
-                                }
-                            };
-
                             let subscriptions_ = self.subscriptions.clone();
                             let abort_handle = self.tasks.spawn(async move {
+                                let (match_params, f) = match_;
+                                let mut stream = match f(Context { client_id, params: match_params }).await {
+                                    Ok(stream) => stream,
+                                    Err(err) => {
+                                        subscriptions_.lock().unwrap().remove(&channel_name);
+                                        let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
+                                        return;
+                                    }
+                                };
+
+                                let _ = reply_ch.send(Ok((id, Reply::Subscribe(SubscribeResult::default())))).await;
+                                drop(permit);
+
                                 while let Some(data) = stream.next().await {
                                     let _ = reply_ch.send(Ok((0, Reply::Push(Push {
                                         channel: channel_name.clone(),
@@ -211,11 +219,12 @@ impl ServerSession {
                                 })))).await;
                             });
                             subscriptions.insert(sub_request.channel, Subscription { abort_handle });
-
-                            Reply::Subscribe(SubscribeResult::default())
+                            None
                         })();
 
-                        let _ = self.reply_ch.send(Ok((id, response))).await;
+                        if let Some(response) = response {
+                            let _ = self.reply_ch.send(Ok((id, response))).await;
+                        }
                     }
                     Command::Unsubscribe(unsub_request) => {
                         let reply = {
@@ -266,7 +275,10 @@ type RpcMethodFn = Arc<
 
 type ChannelFn = Arc<
     dyn Fn(Context) ->
-        Result<Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>, ClientError>
+        Pin<Box<dyn Future<Output = Result<
+            Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>,
+            ClientError
+        >> + Send>>
     + Send + Sync
 >;
 
@@ -310,7 +322,11 @@ impl Server {
     }
 
     // pub fn add_rpc_method<T, R>(&self, name: &str, f: impl Fn(T) -> anyhow::Result<R> + Send + Sync + 'static)
-    pub fn add_rpc_method<In, Out, Fut>(&self, name: &str, f: impl Fn(Context, In) -> Fut + Send + Sync + 'static) -> Result<(), InsertError>
+    pub fn add_rpc_method<In, Out, Fut>(
+        &self,
+        name: &str,
+        f: impl Fn(Context, In) -> Fut + Send + Sync + 'static,
+    ) -> Result<(), InsertError>
     where
         In: serde::de::DeserializeOwned,
         Out: serde::Serialize,
@@ -342,25 +358,33 @@ impl Server {
         self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
-    pub fn add_channel<St, T>(&self, name: &str, f: impl Fn(Context) -> Result<St, ClientError> + Send + Sync + 'static) -> Result<(), InsertError>
+    pub fn add_channel<Out, Fut, St>(
+        &self,
+        name: &str,
+        f: impl Fn(Context) -> Fut + Send + Sync + 'static,
+    ) -> Result<(), InsertError>
     where
-        St: Stream<Item = T> + Send + 'static,
-        T: serde::Serialize + Send + 'static,
+        Out: serde::Serialize + Send + 'static,
+        Fut: std::future::Future<Output = Result<St, ClientError>> + Send + 'static,
+        St: Stream<Item = Out> + Send + 'static,
     {
         let f = Arc::new(f);
         let wrap_f: ChannelFn = Arc::new(move |ctx: Context| {
-            let stream = f(ctx)?;
-            let result = stream.filter_map(async move |item| {
-                let data = match serde_json::to_vec(&item) {
-                    Ok(data) => data,
-                    Err(err) => {
-                        log::error!("failed to serialize channel item: {}", err);
-                        return None;
-                    }
-                };
-                Some(data)
-            });
-            Ok(Box::pin(result))
+            let f = f.clone();
+            Box::pin(async move {
+                let stream = f(ctx).await?;
+                let result = stream.filter_map(async move |item| {
+                    let data = match serde_json::to_vec(&item) {
+                        Ok(data) => data,
+                        Err(err) => {
+                            log::error!("failed to serialize channel item: {}", err);
+                            return None;
+                        }
+                    };
+                    Some(data)
+                });
+                Ok(Box::pin(result) as Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>)
+            })
         });
         self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
     }

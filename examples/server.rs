@@ -81,10 +81,11 @@ async fn main() {
         })
     }).unwrap();
 
-    server.add_channel("test_channel", |_| {
+    server.add_channel("test_channel", async |_| {
         // if true {
         //     return Err(ClientErrorCode::PermissionDenied.into());
         // }
+        tokio::time::sleep(Duration::from_secs(2)).await;
         log::debug!("channel test_channel connected");
         Ok(TestStream::new(Duration::from_millis(500)))
     }).unwrap();
