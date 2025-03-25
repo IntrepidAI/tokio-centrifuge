@@ -137,7 +137,7 @@ impl ServerSession {
                         let client_id = self.client_id;
                         self.tasks.spawn(async move {
                             let (match_params, f) = match_;
-                            let result = f(Context { client_id, params: match_params }, rpc_request.data).await;
+                            let result = f(RpcContext { client_id, params: match_params }, rpc_request.data).await;
                             match result {
                                 Ok(data) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
@@ -186,7 +186,7 @@ impl ServerSession {
                             let subscriptions_ = self.subscriptions.clone();
                             let abort_handle = self.tasks.spawn(async move {
                                 let (match_params, f) = match_;
-                                let mut stream = match f(Context { client_id, params: match_params }).await {
+                                let mut stream = match f(SubContext { client_id, params: match_params, data: sub_request.data }).await {
                                     Ok(stream) => stream,
                                     Err(err) => {
                                         subscriptions_.lock().unwrap().remove(&channel_name);
@@ -256,9 +256,15 @@ pub struct AuthContext {
     pub token: String,
 }
 
-pub struct Context {
+pub struct RpcContext {
     pub client_id: uuid::Uuid,
     pub params: HashMap<String, String>,
+}
+
+pub struct SubContext {
+    pub client_id: uuid::Uuid,
+    pub params: HashMap<String, String>,
+    pub data: Vec<u8>,
 }
 
 type AuthFn = Arc<
@@ -268,13 +274,13 @@ type AuthFn = Arc<
 >;
 
 type RpcMethodFn = Arc<
-    dyn Fn(Context, Vec<u8>) ->
+    dyn Fn(RpcContext, Vec<u8>) ->
         Pin<Box<dyn Future<Output = Result<Vec<u8>, ClientError>> + Send>>
     + Send + Sync
 >;
 
 type ChannelFn = Arc<
-    dyn Fn(Context) ->
+    dyn Fn(SubContext) ->
         Pin<Box<dyn Future<Output = Result<
             Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>,
             ClientError
@@ -325,7 +331,7 @@ impl Server {
     pub fn add_rpc_method<In, Out, Fut>(
         &self,
         name: &str,
-        f: impl Fn(Context, In) -> Fut + Send + Sync + 'static,
+        f: impl Fn(RpcContext, In) -> Fut + Send + Sync + 'static,
     ) -> Result<(), InsertError>
     where
         In: serde::de::DeserializeOwned,
@@ -333,7 +339,7 @@ impl Server {
         Fut: std::future::Future<Output = Result<Out, ClientError>> + Send + 'static,
     {
         let f = Arc::new(f);
-        let wrap_f: RpcMethodFn = Arc::new(move |ctx: Context, data: Vec<u8>| {
+        let wrap_f: RpcMethodFn = Arc::new(move |ctx: RpcContext, data: Vec<u8>| {
             let f = f.clone();
             Box::pin(async move {
                 let mut data = &*data;
@@ -368,7 +374,7 @@ impl Server {
     pub fn add_channel<Out, Fut, St>(
         &self,
         name: &str,
-        f: impl Fn(Context) -> Fut + Send + Sync + 'static,
+        f: impl Fn(SubContext) -> Fut + Send + Sync + 'static,
     ) -> Result<(), InsertError>
     where
         Out: serde::Serialize + Send + 'static,
@@ -376,7 +382,7 @@ impl Server {
         St: Stream<Item = Out> + Send + 'static,
     {
         let f = Arc::new(f);
-        let wrap_f: ChannelFn = Arc::new(move |ctx: Context| {
+        let wrap_f: ChannelFn = Arc::new(move |ctx: SubContext| {
             let f = f.clone();
             Box::pin(async move {
                 let stream = f(ctx).await?;

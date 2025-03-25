@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tokio_centrifuge::errors::DisconnectErrorCode;
-use tokio_centrifuge::server::{AuthContext, Context, Server};
+use tokio_centrifuge::server::{AuthContext, Server};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -73,7 +73,7 @@ async fn main() {
         Ok(())
     });
 
-    server.add_rpc_method("test/{id}", async move |ctx: Context, req: TestRequest| {
+    server.add_rpc_method("test/{id}", async move |ctx, req: TestRequest| {
         log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(TestResponse {
@@ -81,7 +81,8 @@ async fn main() {
         })
     }).unwrap();
 
-    server.add_channel("test_channel", async |_| {
+    server.add_channel("test_channel", async |_ctx| {
+        dbg!(_ctx.data);
         // if true {
         //     return Err(ClientErrorCode::PermissionDenied.into());
         // }

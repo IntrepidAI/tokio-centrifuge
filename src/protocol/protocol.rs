@@ -26,6 +26,7 @@ pub struct EmulationRequest {
     #[serde(skip_serializing_if = "super::is_default")]
     pub session: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
@@ -186,9 +187,11 @@ pub struct ClientInfo {
     #[serde(skip_serializing_if = "super::is_default")]
     pub client: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub conn_info: Vec<u8>,
     #[prost(bytes = "vec", tag = "4")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub chan_info: Vec<u8>,
 }
@@ -254,6 +257,7 @@ pub struct Subscribe {
     #[serde(skip_serializing_if = "super::is_default")]
     pub positioned: bool,
     #[prost(bytes = "vec", tag = "7")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
@@ -262,6 +266,7 @@ pub struct Subscribe {
 #[serde(default, rename_all = "camelCase")]
 pub struct Message {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
@@ -276,6 +281,7 @@ pub struct Connect {
     #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
     #[prost(bytes = "vec", tag = "3")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "4")]
@@ -333,6 +339,7 @@ pub struct ConnectRequest {
     #[serde(skip_serializing_if = "super::is_default")]
     pub token: String,
     #[prost(bytes = "vec", tag = "2")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "3")]
@@ -362,6 +369,7 @@ pub struct ConnectResult {
     #[serde(skip_serializing_if = "super::is_default")]
     pub ttl: u32,
     #[prost(bytes = "vec", tag = "5")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(map = "string, message", tag = "6")]
@@ -425,6 +433,7 @@ pub struct SubscribeRequest {
     #[serde(skip_serializing_if = "super::is_default")]
     pub offset: u64,
     #[prost(bytes = "vec", tag = "8")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(bool, tag = "9")]
@@ -466,6 +475,7 @@ pub struct SubscribeResult {
     #[serde(skip_serializing_if = "super::is_default")]
     pub positioned: bool,
     #[prost(bytes = "vec", tag = "11")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
     #[prost(bool, tag = "12")]
@@ -633,6 +643,7 @@ pub struct RpcResult {
 #[serde(default, rename_all = "camelCase")]
 pub struct SendRequest {
     #[prost(bytes = "vec", tag = "1")]
+    #[serde(serialize_with = "super::serialize_json", deserialize_with = "super::deserialize_json")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub data: Vec<u8>,
 }
