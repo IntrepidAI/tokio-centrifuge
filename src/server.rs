@@ -43,6 +43,7 @@ struct ServerSession {
     client_id: uuid::Uuid,
     state: SessionState,
     on_connect: OnConnectFn,
+    on_disconnect: Option<OnDisconnectFn>,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
@@ -55,14 +56,16 @@ impl ServerSession {
     fn new(
         client_id: uuid::Uuid,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
-        auth_fn: OnConnectFn,
+        on_connect: OnConnectFn,
+        on_disconnect: Option<OnDisconnectFn>,
         rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
         sub_channels: Arc<Mutex<Router<ChannelFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
-            on_connect: auth_fn,
+            on_connect,
+            on_disconnect,
             client_id,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
@@ -252,11 +255,26 @@ impl ServerSession {
     }
 }
 
+impl Drop for ServerSession {
+    fn drop(&mut self) {
+        if self.state == SessionState::Connected {
+            if let Some(on_disconnect) = &self.on_disconnect {
+                on_disconnect(DisconnectContext { client_id: self.client_id });
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConnectContext {
     pub client_id: uuid::Uuid,
     pub token: String,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DisconnectContext {
+    pub client_id: uuid::Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +294,10 @@ type OnConnectFn = Arc<
     dyn Fn(ConnectContext) ->
         Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
     + Send + Sync
+>;
+
+type OnDisconnectFn = Arc<
+    dyn Fn(DisconnectContext) + Send + Sync
 >;
 
 type RpcMethodFn = Arc<
@@ -314,6 +336,7 @@ impl Default for ConnectFnWrapper {
 #[derive(Default, Clone)]
 pub struct Server {
     on_connect: ConnectFnWrapper,
+    on_disconnect: Option<OnDisconnectFn>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
 }
@@ -330,6 +353,10 @@ impl Server {
         self.on_connect = ConnectFnWrapper(Arc::new(move |ctx: ConnectContext| {
             Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
         }));
+    }
+
+    pub fn on_disconnect(&mut self, f: impl Fn(DisconnectContext) + Send + Sync + 'static) {
+        self.on_disconnect = Some(Arc::new(f));
     }
 
     // pub fn add_rpc_method<T, R>(&self, name: &str, f: impl Fn(T) -> anyhow::Result<R> + Send + Sync + 'static)
@@ -403,7 +430,8 @@ impl Server {
         let mut ping_timer = tokio::time::interval(PING_INTERVAL);
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let auth_fn = self.on_connect.0.clone();
+        let connect_fn = self.on_connect.0.clone();
+        let disconnect_fn = self.on_disconnect.clone();
         let rpc_methods = self.rpc_methods.clone();
         let sub_channels = self.sub_channels.clone();
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);
@@ -415,7 +443,8 @@ impl Server {
             let mut session = ServerSession::new(
                 client_id,
                 reply_ch_tx.clone(),
-                auth_fn,
+                connect_fn,
+                disconnect_fn,
                 rpc_methods,
                 sub_channels,
             );
