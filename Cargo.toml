@@ -25,7 +25,7 @@ serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 simple_logger = { version = "5.0.0", optional = true }
 slotmap = "1.0.7"
-thiserror = "1.0.69"
+thiserror = "2.0.12"
 tokio = { version = "1.41.1", features = ["macros", "rt", "sync", "time"] }
 tokio-tungstenite = "0.26.1"
 uuid = { version = "1.11.0", features = ["v4"] }
