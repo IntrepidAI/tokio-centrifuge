@@ -42,7 +42,7 @@ impl Drop for Subscription {
 struct ServerSession {
     client_id: uuid::Uuid,
     state: SessionState,
-    auth_fn: AuthFn,
+    on_connect: OnConnectFn,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
@@ -55,14 +55,14 @@ impl ServerSession {
     fn new(
         client_id: uuid::Uuid,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
-        auth_fn: AuthFn,
+        auth_fn: OnConnectFn,
         rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
         sub_channels: Arc<Mutex<Router<ChannelFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
-            auth_fn,
+            on_connect: auth_fn,
             client_id,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
@@ -82,9 +82,10 @@ impl ServerSession {
                 match command {
                     Command::Connect(connect) => {
                         log::debug!("connection established with name={}, version={}", connect.name, connect.version);
-                        match (self.auth_fn)(AuthContext {
+                        match (self.on_connect)(ConnectContext {
                             client_id: self.client_id,
                             token: connect.token,
+                            data: connect.data,
                         }).await {
                             Ok(()) => (),
                             Err(err) => {
@@ -251,24 +252,28 @@ impl ServerSession {
     }
 }
 
-pub struct AuthContext {
+#[derive(Debug, Clone)]
+pub struct ConnectContext {
     pub client_id: uuid::Uuid,
     pub token: String,
+    pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
 pub struct RpcContext {
     pub client_id: uuid::Uuid,
     pub params: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct SubContext {
     pub client_id: uuid::Uuid,
     pub params: HashMap<String, String>,
     pub data: Vec<u8>,
 }
 
-type AuthFn = Arc<
-    dyn Fn(AuthContext) ->
+type OnConnectFn = Arc<
+    dyn Fn(ConnectContext) ->
         Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
     + Send + Sync
 >;
@@ -289,11 +294,11 @@ type ChannelFn = Arc<
 >;
 
 #[derive(Clone)]
-struct AuthFnWrapper(AuthFn);
+struct ConnectFnWrapper(OnConnectFn);
 
-impl Default for AuthFnWrapper {
+impl Default for ConnectFnWrapper {
     fn default() -> Self {
-        fn default_auth_fn(ctx: AuthContext) -> Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>> {
+        fn default_connect_fn(ctx: ConnectContext) -> Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>> {
             Box::pin(async move {
                 if !ctx.token.is_empty() {
                     return Err(DisconnectErrorCode::InvalidToken);
@@ -302,13 +307,13 @@ impl Default for AuthFnWrapper {
             })
         }
 
-        Self(Arc::new(default_auth_fn))
+        Self(Arc::new(default_connect_fn))
     }
 }
 
 #[derive(Default, Clone)]
 pub struct Server {
-    auth_fn: AuthFnWrapper,
+    on_connect: ConnectFnWrapper,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
 }
@@ -318,11 +323,11 @@ impl Server {
         Self::default()
     }
 
-    pub fn authenticate_with<Fut>(&mut self, f: impl Fn(AuthContext) -> Fut + Send + Sync + 'static)
+    pub fn on_connect<Fut>(&mut self, f: impl Fn(ConnectContext) -> Fut + Send + Sync + 'static)
     where
         Fut: std::future::Future<Output = Result<(), DisconnectErrorCode>> + Send + 'static,
     {
-        self.auth_fn = AuthFnWrapper(Arc::new(move |ctx: AuthContext| {
+        self.on_connect = ConnectFnWrapper(Arc::new(move |ctx: ConnectContext| {
             Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
         }));
     }
@@ -413,7 +418,7 @@ impl Server {
         let mut ping_timer = tokio::time::interval(PING_INTERVAL);
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let auth_fn = self.auth_fn.0.clone();
+        let auth_fn = self.on_connect.0.clone();
         let rpc_methods = self.rpc_methods.clone();
         let sub_channels = self.sub_channels.clone();
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);

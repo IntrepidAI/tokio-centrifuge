@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tokio_centrifuge::errors::DisconnectErrorCode;
-use tokio_centrifuge::server::{AuthContext, Server};
+use tokio_centrifuge::server::{ConnectContext, Server};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -66,7 +66,7 @@ async fn main() {
 
     let mut server = Server::new();
 
-    server.authenticate_with(async move |ctx: AuthContext| {
+    server.on_connect(async move |ctx: ConnectContext| {
         if !ctx.token.is_empty() {
             return Err(DisconnectErrorCode::InvalidToken);
         }
