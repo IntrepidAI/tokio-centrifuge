@@ -7,8 +7,25 @@ use serde::Serialize;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::Protocol;
+use crate::errors::{ClientError, ClientErrorCode};
 
-pub fn decode_frames<T: DeserializeOwned + ProstMessage + Default>(
+// same as serde_json::from_slice, but handles empty data correctly
+pub fn deserialize<T: DeserializeOwned>(mut data: &[u8]) -> Result<T, ClientError> {
+    if data.is_empty() {
+        // make sure `client.rpc("method")` and `client.rpc("method", null)` are equivalent,
+        // otherwise former will be [] and fail json deserialization
+        data = b"null";
+    }
+
+    serde_json::from_slice(data).map_err(|err| {
+        ClientError {
+            code: ClientErrorCode::BadRequest,
+            message: err.to_string(),
+        }
+    })
+}
+
+pub(crate) fn decode_frames<T: DeserializeOwned + ProstMessage + Default>(
     data: &[u8],
     protocol: Protocol,
     handle_frame: impl FnMut(anyhow::Result<T>) -> anyhow::Result<()>,
@@ -71,7 +88,7 @@ fn decode_frames_protobuf<T: ProstMessage + Default>(
     Ok(())
 }
 
-pub fn encode_frames<T: Serialize + ProstMessage>(
+pub(crate) fn encode_frames<T: Serialize + ProstMessage>(
     commands: &[T],
     protocol: Protocol,
     mut on_encode_error: impl FnMut(usize),

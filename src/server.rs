@@ -347,22 +347,7 @@ impl Server {
         let wrap_f: RpcMethodFn = Arc::new(move |ctx: RpcContext, data: Vec<u8>| {
             let f = f.clone();
             Box::pin(async move {
-                let mut data = &*data;
-                if data.is_empty() {
-                    // make sure `client.rpc("method")` and `client.rpc("method", null)` are equivalent,
-                    // otherwise former will be [] and fail json deserialization
-                    data = b"null";
-                }
-
-                let data = match serde_json::from_slice(data) {
-                    Ok(data) => data,
-                    Err(err) => {
-                        return Err(ClientError {
-                            code: ClientErrorCode::BadRequest,
-                            message: err.to_string(),
-                        });
-                    }
-                };
+                let data = crate::utils::deserialize(&data)?;
                 let result = f(ctx, data).await?;
                 let bytes = match serde_json::to_vec(&result) {
                     Ok(bytes) => bytes,
