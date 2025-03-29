@@ -19,6 +19,8 @@ use crate::protocol::{
 };
 use crate::utils::{decode_frames, encode_frames};
 
+pub type ClientId = uuid::Uuid;
+
 const PING_INTERVAL: Duration = Duration::from_secs(25);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -40,7 +42,7 @@ impl Drop for Subscription {
 }
 
 struct ServerSession {
-    client_id: uuid::Uuid,
+    client_id: ClientId,
     state: SessionState,
     on_connect: OnConnectFn,
     on_disconnect: Option<OnDisconnectFn>,
@@ -54,7 +56,7 @@ struct ServerSession {
 
 impl ServerSession {
     fn new(
-        client_id: uuid::Uuid,
+        client_id: ClientId,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         on_connect: OnConnectFn,
         on_disconnect: Option<OnDisconnectFn>,
@@ -267,25 +269,25 @@ impl Drop for ServerSession {
 
 #[derive(Debug, Clone)]
 pub struct ConnectContext {
-    pub client_id: uuid::Uuid,
+    pub client_id: ClientId,
     pub token: String,
     pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DisconnectContext {
-    pub client_id: uuid::Uuid,
+    pub client_id: ClientId,
 }
 
 #[derive(Debug, Clone)]
 pub struct RpcContext {
-    pub client_id: uuid::Uuid,
+    pub client_id: ClientId,
     pub params: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SubContext {
-    pub client_id: uuid::Uuid,
+    pub client_id: ClientId,
     pub params: HashMap<String, String>,
     pub data: Vec<u8>,
 }
