@@ -14,8 +14,8 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use crate::config::Protocol;
 use crate::errors::{ClientError, ClientErrorCode, DisconnectErrorCode};
 use crate::protocol::{
-    Command, ConnectResult, Publication, Push, PushData, RawCommand, RawReply, Reply, RpcResult,
-    SubscribeResult, Unsubscribe, UnsubscribeResult,
+    Command, ConnectResult, Publication, PublishResult, Push, PushData, RawCommand, RawReply,
+    Reply, RpcResult, SubscribeResult, Unsubscribe, UnsubscribeResult,
 };
 use crate::utils::{decode_frames, encode_frames};
 
@@ -32,6 +32,7 @@ enum SessionState {
 }
 
 struct Subscription {
+    client_stream: tokio::sync::mpsc::Sender<Vec<u8>>,
     abort_handle: AbortHandle,
 }
 
@@ -188,11 +189,17 @@ impl ServerSession {
                             let reply_ch = self.reply_ch.clone();
                             let channel_name = sub_request.channel.clone();
                             let client_id = self.client_id;
-
                             let subscriptions_ = self.subscriptions.clone();
+                            let (input_ch_tx, input_ch_rx) = tokio::sync::mpsc::channel(64);
+
                             let abort_handle = self.tasks.spawn(async move {
                                 let (match_params, f) = match_;
-                                let mut stream = match f(SubContext { client_id, params: match_params, data: sub_request.data }).await {
+                                let mut stream = match f(SubContext {
+                                    client_id,
+                                    params: match_params,
+                                    data: sub_request.data,
+                                    stream: input_ch_rx,
+                                }).await {
                                     Ok(stream) => stream,
                                     Err(err) => {
                                         subscriptions_.lock().unwrap().remove(&channel_name);
@@ -224,7 +231,10 @@ impl ServerSession {
                                     }),
                                 })))).await;
                             });
-                            subscriptions.insert(sub_request.channel, Subscription { abort_handle });
+                            subscriptions.insert(sub_request.channel, Subscription {
+                                client_stream: input_ch_tx,
+                                abort_handle,
+                            });
                             None
                         })();
 
@@ -242,6 +252,43 @@ impl ServerSession {
                         };
 
                         let _ = self.reply_ch.send(Ok((id, reply))).await;
+                    }
+                    Command::Publish(pub_request) => {
+                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
+
+                        let response = {
+                            let subscriptions = self.subscriptions.lock().unwrap();
+                            if let Some(sub) = subscriptions.get(&pub_request.channel) {
+                                let reply_ch = self.reply_ch.clone();
+                                let client_stream = sub.client_stream.clone();
+
+                                self.tasks.spawn(async move {
+                                    let response = match client_stream.send(pub_request.data).await {
+                                        Ok(()) => Reply::Publish(PublishResult {}),
+                                        Err(err) => {
+                                            Reply::Error(ClientError {
+                                                code: ClientErrorCode::Internal,
+                                                message: err.to_string(),
+                                            }.into())
+                                        }
+                                    };
+                                    drop(permit);
+
+                                    let _ = reply_ch.send(Ok((id, response))).await;
+                                });
+
+                                None
+                            } else {
+                                Some(Reply::Error(ClientError {
+                                    code: ClientErrorCode::PermissionDenied,
+                                    message: "not subscribed".to_string(),
+                                }.into()))
+                            }
+                        };
+
+                        if let Some(response) = response {
+                            let _ = self.reply_ch.send(Ok((id, response))).await;
+                        }
                     }
                     _ => {
                         let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::NotAvailable.into())))).await;
@@ -267,29 +314,30 @@ impl Drop for ServerSession {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConnectContext {
     pub client_id: ClientId,
     pub token: String,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DisconnectContext {
     pub client_id: ClientId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpcContext {
     pub client_id: ClientId,
     pub params: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SubContext {
     pub client_id: ClientId,
     pub params: HashMap<String, String>,
     pub data: Vec<u8>,
+    pub stream: tokio::sync::mpsc::Receiver<Vec<u8>>,
 }
 
 type OnConnectFn = Arc<

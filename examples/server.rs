@@ -82,13 +82,26 @@ async fn main() {
     }).unwrap();
 
     server.add_channel("test_channel", async |_ctx| {
-        dbg!(_ctx.data);
+        // dbg!(_ctx.data);
         // if true {
         //     return Err(ClientErrorCode::PermissionDenied.into());
         // }
         tokio::time::sleep(Duration::from_secs(2)).await;
         log::debug!("channel test_channel connected");
         Ok(TestStream::new(Duration::from_millis(500)))
+    }).unwrap();
+
+    server.add_channel("echo_channel", async |mut ctx| {
+        Ok(async_stream::stream! {
+            while let Some(msg) = ctx.stream.recv().await {
+                yield serde_json::from_slice(&msg).unwrap_or(serde_json::Value::Null);
+            }
+
+            // for i in 0.. {
+            //     tokio::time::sleep(Duration::from_millis(500)).await;
+            //     yield TestStreamItem { foobar: i };
+            // }
+        })
     }).unwrap();
 
     while let Ok((stream, addr)) = listener.accept().await {
