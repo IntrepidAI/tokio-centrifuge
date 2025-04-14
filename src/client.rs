@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Display;
 use std::future::IntoFuture;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -6,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use futures::Future;
 use slotmap::SlotMap;
+use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
@@ -685,6 +687,27 @@ where
     }
 }
 
+#[derive(Error, Debug)]
+pub enum RequestError {
+    ErrorResponse(crate::protocol::Error),
+    UnexpectedReply(crate::protocol::Reply),
+    ReplyError(#[from] crate::client_handler::ReplyError),
+    Timeout(#[from] tokio::time::error::Elapsed),
+    Cancelled(#[from] tokio::sync::oneshot::error::RecvError),
+}
+
+impl Display for RequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestError::ErrorResponse(err) => write!(f, "{} {}", err.code, err.message),
+            RequestError::UnexpectedReply(_) => write!(f, "unexpected reply"),
+            RequestError::ReplyError(err) => write!(f, "{}", err),
+            RequestError::Timeout(err) => write!(f, "{}", err),
+            RequestError::Cancelled(_) => write!(f, "operation cancelled"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Client(pub(crate) Arc<Mutex<ClientInner>>);
 
@@ -756,7 +779,7 @@ impl Client {
         &self,
         channel: &str,
         data: Vec<u8>,
-    ) -> FutureResult<impl Future<Output = Result<(), ()>>> {
+    ) -> FutureResult<impl Future<Output = Result<(), RequestError>>> {
         let mut inner = self.0.lock().unwrap();
         let read_timeout = inner.read_timeout;
         let deadline = Instant::now() + read_timeout;
@@ -772,10 +795,19 @@ impl Client {
         };
         FutureResult(async move {
             let result = tokio::time::timeout_at(deadline.into(), rx).await;
-            if let Ok(Ok(Ok(Reply::Publish(_)))) = result {
-                Ok(())
-            } else {
-                Err(())
+            match result {
+                Ok(Ok(Ok(Reply::Publish(_)))) => {
+                    Ok(())
+                }
+                Ok(Ok(Ok(Reply::Error(err)))) => {
+                    Err(RequestError::ErrorResponse(err))
+                }
+                Ok(Ok(Ok(reply))) => {
+                    Err(RequestError::UnexpectedReply(reply))
+                }
+                Ok(Ok(Err(err))) => Err(err.into()),
+                Ok(Err(err)) => Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         })
     }
@@ -784,7 +816,7 @@ impl Client {
         &self,
         method: &str,
         data: Vec<u8>,
-    ) -> FutureResult<impl Future<Output = Result<Vec<u8>, ()>>> {
+    ) -> FutureResult<impl Future<Output = Result<Vec<u8>, RequestError>>> {
         let mut inner = self.0.lock().unwrap();
         let read_timeout = inner.read_timeout;
         let deadline = Instant::now() + read_timeout;
@@ -800,10 +832,19 @@ impl Client {
         };
         FutureResult(async move {
             let result = tokio::time::timeout_at(deadline.into(), rx).await;
-            if let Ok(Ok(Ok(Reply::Rpc(rpc_result)))) = result {
-                Ok(rpc_result.data)
-            } else {
-                Err(())
+            match result {
+                Ok(Ok(Ok(Reply::Rpc(rpc_result)))) => {
+                    Ok(rpc_result.data)
+                }
+                Ok(Ok(Ok(Reply::Error(err)))) => {
+                    Err(RequestError::ErrorResponse(err))
+                }
+                Ok(Ok(Ok(reply))) => {
+                    Err(RequestError::UnexpectedReply(reply))
+                }
+                Ok(Ok(Err(err))) => Err(err.into()),
+                Ok(Err(err)) => Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         })
     }

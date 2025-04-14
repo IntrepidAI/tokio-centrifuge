@@ -5,7 +5,7 @@ use futures::Future;
 use slotmap::new_key_type;
 use tokio::sync::oneshot;
 
-use crate::client::{Client, FutureResult, MessageStore};
+use crate::client::{Client, FutureResult, MessageStore, RequestError};
 use crate::client_handler::ReplyError;
 use crate::protocol::{Command, Publication, PublishRequest, Reply};
 
@@ -153,7 +153,7 @@ impl Subscription {
     pub fn publish(
         &self,
         data: Vec<u8>,
-    ) -> FutureResult<impl Future<Output = Result<(), ()>>> {
+    ) -> FutureResult<impl Future<Output = Result<(), RequestError>>> {
         let mut inner = self.client.0.lock().unwrap();
         let read_timeout = inner.read_timeout;
         let deadline = Instant::now() + read_timeout;
@@ -175,10 +175,19 @@ impl Subscription {
         };
         FutureResult(async move {
             let result = tokio::time::timeout_at(deadline.into(), rx).await;
-            if let Ok(Ok(Ok(Reply::Publish(_)))) = result {
-                Ok(())
-            } else {
-                Err(())
+            match result {
+                Ok(Ok(Ok(Reply::Publish(_)))) => {
+                    Ok(())
+                }
+                Ok(Ok(Ok(Reply::Error(err)))) => {
+                    Err(RequestError::ErrorResponse(err))
+                }
+                Ok(Ok(Ok(reply))) => {
+                    Err(RequestError::UnexpectedReply(reply))
+                }
+                Ok(Ok(Err(err))) => Err(err.into()),
+                Ok(Err(err)) => Err(err.into()),
+                Err(err) => Err(err.into()),
             }
         })
     }
