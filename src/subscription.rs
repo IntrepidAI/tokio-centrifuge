@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 
 use crate::client::{Client, FutureResult, MessageStore};
 use crate::client_handler::ReplyError;
-use crate::protocol::{Publication, Reply};
+use crate::protocol::{Command, Publication, PublishRequest, Reply};
 
 new_key_type! { pub(crate) struct SubscriptionId; }
 
@@ -159,7 +159,10 @@ impl Subscription {
         let deadline = Instant::now() + read_timeout;
         let rx = if let Some(sub) = inner.subscriptions.get_mut(self.id) {
             if let Some(ref mut pub_ch_write) = sub.pub_ch_write {
-                pub_ch_write.publish(sub.channel.clone(), data)
+                pub_ch_write.send(Command::Publish(PublishRequest {
+                    channel: (*sub.channel).to_owned(),
+                    data,
+                }))
             } else {
                 let (tx, rx) = oneshot::channel();
                 let _ = tx.send(Err(ReplyError::Closed));

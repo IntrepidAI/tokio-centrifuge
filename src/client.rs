@@ -15,7 +15,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
 use crate::protocol::{
-    Command, ConnectRequest, PublishRequest, PushData, Reply, SubscribeRequest, UnsubscribeRequest,
+    Command, ConnectRequest, PublishRequest, PushData, Reply, RpcRequest, SubscribeRequest, UnsubscribeRequest
 };
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
 use crate::{errors, subscription};
@@ -28,8 +28,7 @@ pub enum State {
 }
 
 pub(crate) struct MessageStoreItem {
-    channel: Arc<str>,
-    data: Vec<u8>,
+    command: Command,
     reply: oneshot::Sender<Result<Reply, ReplyError>>,
     deadline: Instant,
 }
@@ -62,13 +61,12 @@ impl MessageStore {
         (store, activity_rx)
     }
 
-    pub fn publish(&mut self, channel: Arc<str>, data: Vec<u8>) -> oneshot::Receiver<Result<Reply, ReplyError>> {
+    pub fn send(&mut self, command: Command) -> oneshot::Receiver<Result<Reply, ReplyError>> {
         let (tx, rx) = oneshot::channel();
         let now = Instant::now();
         let deadline = now + self.timeout;
         self.messages.push_back(MessageStoreItem {
-            channel,
-            data,
+            command,
             reply: tx,
             deadline,
         });
@@ -497,10 +495,7 @@ impl ClientInner {
                         // send messages
                         for item in buffer.drain(..) {
                             let timeout = item.deadline.saturating_duration_since(Instant::now());
-                            let _ = control_write.send((Command::Publish(PublishRequest {
-                                channel: item.channel.to_string(),
-                                data: item.data,
-                            }), item.reply, timeout)).await;
+                            let _ = control_write.send((item.command, item.reply, timeout)).await;
                         }
                     }
                 }
@@ -766,7 +761,10 @@ impl Client {
         let read_timeout = inner.read_timeout;
         let deadline = Instant::now() + read_timeout;
         let rx = if let Some(ref mut pub_ch_write) = inner.pub_ch_write {
-            pub_ch_write.publish(channel.into(), data)
+            pub_ch_write.send(Command::Publish(PublishRequest {
+                channel: channel.into(),
+                data,
+            }))
         } else {
             let (tx, rx) = oneshot::channel();
             let _ = tx.send(Err(ReplyError::Closed));
@@ -776,6 +774,34 @@ impl Client {
             let result = tokio::time::timeout_at(deadline.into(), rx).await;
             if let Ok(Ok(Ok(Reply::Publish(_)))) = result {
                 Ok(())
+            } else {
+                Err(())
+            }
+        })
+    }
+
+    pub fn rpc(
+        &self,
+        method: &str,
+        data: Vec<u8>,
+    ) -> FutureResult<impl Future<Output = Result<Vec<u8>, ()>>> {
+        let mut inner = self.0.lock().unwrap();
+        let read_timeout = inner.read_timeout;
+        let deadline = Instant::now() + read_timeout;
+        let rx = if let Some(ref mut pub_ch_write) = inner.pub_ch_write {
+            pub_ch_write.send(Command::Rpc(RpcRequest {
+                method: method.into(),
+                data,
+            }))
+        } else {
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Err(ReplyError::Closed));
+            rx
+        };
+        FutureResult(async move {
+            let result = tokio::time::timeout_at(deadline.into(), rx).await;
+            if let Ok(Ok(Ok(Reply::Rpc(rpc_result)))) = result {
+                Ok(rpc_result.data)
             } else {
                 Err(())
             }
