@@ -39,3 +39,6 @@ examples = ["tokio/full", "native-tls", "dep:simple_logger", "dep:async-std"]
 native-tls = ["tokio-tungstenite/native-tls"]
 rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
+
+[lints.clippy]
+uninlined_format_args = "allow"
