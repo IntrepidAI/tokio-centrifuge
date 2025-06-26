@@ -73,6 +73,12 @@ fn decode_frames_protobuf<T: ProstMessage + Default>(
             break;
         };
         let len_delimiter_len = prost::length_delimiter_len(len);
+        if len_delimiter_len + len > data.len() {
+            // need bounds check because len_delimiter is user controlled
+            log::trace!("<-- {} (??)", format_protobuf(data));
+            break;
+        }
+
         log::trace!("<-- {}", format_protobuf(&data[..len_delimiter_len + len]));
         data = &data[len_delimiter_len..];
 
@@ -137,5 +143,6 @@ fn format_protobuf(buf: &[u8]) -> String {
     };
     let len_delimiter_len = prost::length_delimiter_len(len);
 
-    format!("{} {}", buf_to_hex(&buf[..len_delimiter_len]), buf_to_hex(&buf[len_delimiter_len..]))
+    let (len, body) = buf.split_at_checked(len_delimiter_len).unwrap_or((buf, &[]));
+    format!("{} {}", buf_to_hex(len), buf_to_hex(body))
 }
