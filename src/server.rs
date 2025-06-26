@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -19,7 +20,26 @@ use crate::protocol::{
 };
 use crate::utils::{decode_frames, encode_frames};
 
-pub type ClientId = uuid::Uuid;
+#[derive(Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ClientId(uuid::Uuid);
+
+impl ClientId {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+impl Default for ClientId {
+    fn default() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl Display for ClientId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.as_hyphenated())
+    }
+}
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
@@ -90,6 +110,8 @@ impl ServerSession {
                         log::debug!("connection established with name={}, version={}", connect.name, connect.version);
                         match (self.on_connect)(ConnectContext {
                             client_id: self.client_id,
+                            client_name: connect.name,
+                            client_version: connect.version,
                             token: connect.token,
                             data: connect.data,
                         }).await {
@@ -103,7 +125,7 @@ impl ServerSession {
 
                         self.state = SessionState::Connected;
                         let _ = self.reply_ch.send(Ok((id, Reply::Connect(ConnectResult {
-                            client: self.client_id.as_hyphenated().to_string(),
+                            client: self.client_id.to_string(),
                             ping: PING_INTERVAL.as_secs() as u32,
                             pong: true,
                             ..Default::default()
@@ -317,6 +339,8 @@ impl Drop for ServerSession {
 #[derive(Debug)]
 pub struct ConnectContext {
     pub client_id: ClientId,
+    pub client_name: String,
+    pub client_version: String,
     pub token: String,
     pub data: Vec<u8>,
 }
@@ -473,7 +497,13 @@ impl Server {
     where
         S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
     {
-        let client_id = uuid::Uuid::new_v4();
+        self.serve_with_client_id(stream, protocol, ClientId::new()).await;
+    }
+
+    pub async fn serve_with_client_id<S>(&self, stream: S, protocol: Protocol, client_id: ClientId)
+    where
+        S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
+    {
         let (mut write_ws, mut read_ws) = stream.split();
         let (closer_tx, mut closer_rx) = tokio::sync::mpsc::channel::<()>(1);
 
