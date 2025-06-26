@@ -64,6 +64,7 @@ impl Drop for Subscription {
 
 struct ServerSession {
     client_id: ClientId,
+    encoding: Protocol,
     state: SessionState,
     on_connect: OnConnectFn,
     on_disconnect: Option<OnDisconnectFn>,
@@ -78,6 +79,7 @@ struct ServerSession {
 impl ServerSession {
     fn new(
         client_id: ClientId,
+        encoding: Protocol,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         on_connect: OnConnectFn,
         on_disconnect: Option<OnDisconnectFn>,
@@ -87,6 +89,7 @@ impl ServerSession {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
+            encoding,
             on_connect,
             on_disconnect,
             client_id,
@@ -164,9 +167,10 @@ impl ServerSession {
 
                         let reply_ch = self.reply_ch.clone();
                         let client_id = self.client_id;
+                        let encoding = self.encoding;
                         self.tasks.spawn(async move {
                             let (match_params, f) = match_;
-                            let result = f(RpcContext { client_id, params: match_params }, rpc_request.data).await;
+                            let result = f(RpcContext { encoding, client_id, params: match_params }, rpc_request.data).await;
                             match result {
                                 Ok(data) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
@@ -211,12 +215,14 @@ impl ServerSession {
                             let reply_ch = self.reply_ch.clone();
                             let channel_name = sub_request.channel.clone();
                             let client_id = self.client_id;
+                            let encoding = self.encoding;
                             let subscriptions_ = self.subscriptions.clone();
                             let (input_ch_tx, input_ch_rx) = tokio::sync::mpsc::channel(64);
 
                             let abort_handle = self.tasks.spawn(async move {
                                 let (match_params, f) = match_;
                                 let mut stream = match f(SubContext {
+                                    encoding,
                                     client_id,
                                     params: match_params,
                                     data: sub_request.data,
@@ -352,12 +358,14 @@ pub struct DisconnectContext {
 
 #[derive(Debug)]
 pub struct RpcContext {
+    pub encoding: Protocol,
     pub client_id: ClientId,
     pub params: HashMap<String, String>,
 }
 
 #[derive(Debug)]
 pub struct SubContext {
+    pub encoding: Protocol,
     pub client_id: ClientId,
     pub params: HashMap<String, String>,
     pub data: Vec<u8>,
@@ -433,61 +441,34 @@ impl Server {
         self.on_disconnect = Some(Arc::new(f));
     }
 
-    // pub fn add_rpc_method<T, R>(&self, name: &str, f: impl Fn(T) -> anyhow::Result<R> + Send + Sync + 'static)
-    pub fn add_rpc_method<In, Out, Fut>(
+    pub fn add_rpc_method<Fut>(
         &self,
         name: &str,
-        f: impl Fn(RpcContext, In) -> Fut + Send + Sync + 'static,
+        f: impl Fn(RpcContext, Vec<u8>) -> Fut + Send + Sync + 'static,
     ) -> Result<(), InsertError>
     where
-        In: serde::de::DeserializeOwned,
-        Out: serde::Serialize,
-        Fut: std::future::Future<Output = Result<Out, ClientError>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<Vec<u8>, ClientError>> + Send + 'static,
     {
-        let f = Arc::new(f);
         let wrap_f: RpcMethodFn = Arc::new(move |ctx: RpcContext, data: Vec<u8>| {
-            let f = f.clone();
-            Box::pin(async move {
-                let data = crate::utils::deserialize(&data)?;
-                let result = f(ctx, data).await?;
-                let bytes = match serde_json::to_vec(&result) {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        return Err(ClientError::internal(err.to_string()));
-                    }
-                };
-                Ok(bytes)
-            })
+            Box::pin(f(ctx, data))
         });
         self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
-    pub fn add_channel<Out, Fut, St>(
+    pub fn add_channel<Fut, St>(
         &self,
         name: &str,
         f: impl Fn(SubContext) -> Fut + Send + Sync + 'static,
     ) -> Result<(), InsertError>
     where
-        Out: serde::Serialize + Send + 'static,
         Fut: std::future::Future<Output = Result<St, ClientError>> + Send + 'static,
-        St: Stream<Item = Out> + Send + 'static,
+        St: Stream<Item = Vec<u8>> + Send + 'static,
     {
         let f = Arc::new(f);
         let wrap_f: ChannelFn = Arc::new(move |ctx: SubContext| {
             let f = f.clone();
             Box::pin(async move {
-                let stream = f(ctx).await?;
-                let result = stream.filter_map(async move |item| {
-                    let data = match serde_json::to_vec(&item) {
-                        Ok(data) => data,
-                        Err(err) => {
-                            log::error!("failed to serialize channel item: {}", err);
-                            return None;
-                        }
-                    };
-                    Some(data)
-                });
-                Ok(Box::pin(result) as Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>)
+                Ok(Box::pin(f(ctx).await?) as Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>)
             })
         });
         self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
@@ -522,6 +503,7 @@ impl Server {
 
             let mut session = ServerSession::new(
                 client_id,
+                protocol,
                 reply_ch_tx.clone(),
                 connect_fn,
                 disconnect_fn,

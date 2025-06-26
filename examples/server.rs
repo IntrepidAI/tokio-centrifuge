@@ -1,9 +1,11 @@
 use std::task::Poll;
 use std::time::Duration;
 
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use tokio_centrifuge::errors::DisconnectErrorCode;
 use tokio_centrifuge::server::{ConnectContext, Server};
+use tokio_centrifuge::utils::{decode_json, encode_json};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -73,10 +75,11 @@ async fn main() {
         Ok(())
     });
 
-    server.add_rpc_method("test/{id}", async move |ctx, req: TestRequest| {
+    server.add_rpc_method("test/{id}", async move |ctx, req| {
+        let req: TestRequest = decode_json(&req)?;
         log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;
-        Ok(TestResponse {
+        encode_json(TestResponse {
             world: req.hello.to_string(),
         })
     }).unwrap();
@@ -88,7 +91,9 @@ async fn main() {
         // }
         tokio::time::sleep(Duration::from_secs(2)).await;
         log::debug!("channel test_channel connected");
-        Ok(TestStream::new(Duration::from_millis(500)))
+        Ok(TestStream::new(Duration::from_millis(500)).filter_map(async move |item| {
+            encode_json(item).ok()
+        }))
     }).unwrap();
 
     server.add_channel("echo_channel", async |mut ctx| {
@@ -101,7 +106,9 @@ async fn main() {
             //     tokio::time::sleep(Duration::from_millis(500)).await;
             //     yield TestStreamItem { foobar: i };
             // }
-        })
+        }.filter_map(async move |item| {
+            encode_json(item).ok()
+        }))
     }).unwrap();
 
     while let Ok((stream, addr)) = listener.accept().await {

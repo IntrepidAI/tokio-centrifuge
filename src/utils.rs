@@ -1,7 +1,6 @@
 use std::io::BufRead;
 
 use anyhow::anyhow;
-use prost::Message as ProstMessage;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio_tungstenite::tungstenite::Message;
@@ -10,7 +9,7 @@ use crate::config::Protocol;
 use crate::errors::{ClientError, ClientErrorCode};
 
 // same as serde_json::from_slice, but handles empty data correctly
-pub fn deserialize<T: DeserializeOwned>(mut data: &[u8]) -> Result<T, ClientError> {
+pub fn decode_json<T: serde::de::DeserializeOwned>(mut data: &[u8]) -> Result<T, ClientError> {
     if data.is_empty() {
         // make sure `client.rpc("method")` and `client.rpc("method", null)` are equivalent,
         // otherwise former will be [] and fail json deserialization
@@ -25,7 +24,41 @@ pub fn deserialize<T: DeserializeOwned>(mut data: &[u8]) -> Result<T, ClientErro
     })
 }
 
-pub(crate) fn decode_frames<T: DeserializeOwned + ProstMessage + Default>(
+pub fn encode_json<T: serde::Serialize>(data: T) -> Result<Vec<u8>, ClientError> {
+    serde_json::to_vec(&data).map_err(|err| ClientError::internal(err.to_string()))
+}
+
+pub fn decode_proto<T: prost::Message + Default>(data: &[u8]) -> Result<T, ClientError> {
+    T::decode(data).map_err(|_| ClientError {
+        code: ClientErrorCode::BadRequest,
+        message: "failed to decode protobuf".to_owned(),
+    })
+}
+
+pub fn encode_proto<T: prost::Message>(data: T) -> Result<Vec<u8>, ClientError> {
+    let mut buf = Vec::new();
+    data.encode(&mut buf).map_err(|_| ClientError {
+        code: ClientErrorCode::Internal,
+        message: "failed to encode protobuf".to_owned(),
+    })?;
+    Ok(buf)
+}
+
+pub fn decode_with<T: DeserializeOwned + prost::Message + Default>(data: &[u8], protocol: Protocol) -> Result<T, ClientError> {
+    match protocol {
+        Protocol::Json => decode_json(data),
+        Protocol::Protobuf => decode_proto(data),
+    }
+}
+
+pub fn encode_with<T: Serialize + prost::Message>(data: T, protocol: Protocol) -> Result<Vec<u8>, ClientError> {
+    match protocol {
+        Protocol::Json => encode_json(data),
+        Protocol::Protobuf => encode_proto(data),
+    }
+}
+
+pub(crate) fn decode_frames<T: DeserializeOwned + prost::Message + Default>(
     data: &[u8],
     protocol: Protocol,
     handle_frame: impl FnMut(anyhow::Result<T>) -> anyhow::Result<()>,
@@ -64,7 +97,7 @@ fn decode_frames_json<T: DeserializeOwned>(
     Ok(())
 }
 
-fn decode_frames_protobuf<T: ProstMessage + Default>(
+fn decode_frames_protobuf<T: prost::Message + Default>(
     mut data: &[u8],
     mut handle_frame: impl FnMut(anyhow::Result<T>) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
@@ -94,7 +127,7 @@ fn decode_frames_protobuf<T: ProstMessage + Default>(
     Ok(())
 }
 
-pub(crate) fn encode_frames<T: Serialize + ProstMessage>(
+pub(crate) fn encode_frames<T: Serialize + prost::Message>(
     commands: &[T],
     protocol: Protocol,
     mut on_encode_error: impl FnMut(usize),
