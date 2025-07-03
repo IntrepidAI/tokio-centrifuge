@@ -67,6 +67,7 @@ struct ServerSession {
     encoding: Protocol,
     state: SessionState,
     on_connect: OnConnectFn,
+    on_publication: Option<PublishFn>,
     on_disconnect: Option<OnDisconnectFn>,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
@@ -77,11 +78,13 @@ struct ServerSession {
 }
 
 impl ServerSession {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         client_id: ClientId,
         encoding: Protocol,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         on_connect: OnConnectFn,
+        on_publication: Option<PublishFn>,
         on_disconnect: Option<OnDisconnectFn>,
         rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
         sub_channels: Arc<Mutex<Router<ChannelFn>>>,
@@ -91,6 +94,7 @@ impl ServerSession {
         Self {
             encoding,
             on_connect,
+            on_publication,
             on_disconnect,
             client_id,
             state: SessionState::Initial,
@@ -284,7 +288,30 @@ impl ServerSession {
                     Command::Publish(pub_request) => {
                         let permit = self.rpc_semaphore.clone().acquire_owned().await;
 
-                        let response = {
+                        let response = if let Some(on_publication) = self.on_publication.clone() {
+                            let reply_ch = self.reply_ch.clone();
+                            let encoding = self.encoding;
+                            let client_id = self.client_id;
+
+                            self.tasks.spawn(async move {
+                                let response = match on_publication(PublishContext {
+                                    encoding,
+                                    client_id,
+                                    channel: pub_request.channel,
+                                    data: pub_request.data,
+                                }).await {
+                                    Ok(()) => Reply::Publish(PublishResult {}),
+                                    Err(err) => {
+                                        Reply::Error(err.into())
+                                    }
+                                };
+                                drop(permit);
+
+                                let _ = reply_ch.send(Ok((id, response))).await;
+                            });
+
+                            None
+                        } else {
                             let subscriptions = self.subscriptions.lock().unwrap();
                             if let Some(sub) = subscriptions.get(&pub_request.channel) {
                                 let reply_ch = self.reply_ch.clone();
@@ -372,9 +399,23 @@ pub struct SubContext {
     pub stream: tokio::sync::mpsc::Receiver<Vec<u8>>,
 }
 
+#[derive(Debug)]
+pub struct PublishContext {
+    pub encoding: Protocol,
+    pub client_id: ClientId,
+    pub channel: String,
+    pub data: Vec<u8>,
+}
+
 type OnConnectFn = Arc<
     dyn Fn(ConnectContext) ->
         Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
+    + Send + Sync
+>;
+
+type PublishFn = Arc<
+    dyn Fn(PublishContext) ->
+        Pin<Box<dyn Future<Output = Result<(), ClientError>> + Send>>
     + Send + Sync
 >;
 
@@ -418,6 +459,7 @@ impl Default for ConnectFnWrapper {
 #[derive(Default, Clone)]
 pub struct Server {
     on_connect: ConnectFnWrapper,
+    on_publication: Option<PublishFn>,
     on_disconnect: Option<OnDisconnectFn>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
@@ -434,6 +476,15 @@ impl Server {
     {
         self.on_connect = ConnectFnWrapper(Arc::new(move |ctx: ConnectContext| {
             Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
+        }));
+    }
+
+    pub fn on_publication<Fut>(&mut self, f: impl Fn(PublishContext) -> Fut + Send + Sync + 'static)
+    where
+        Fut: std::future::Future<Output = Result<(), ClientError>> + Send + 'static,
+    {
+        self.on_publication = Some(Arc::new(move |ctx: PublishContext| {
+            Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), ClientError>> + Send>>
         }));
     }
 
@@ -492,6 +543,7 @@ impl Server {
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let connect_fn = self.on_connect.0.clone();
+        let publication_fn = self.on_publication.clone();
         let disconnect_fn = self.on_disconnect.clone();
         let rpc_methods = self.rpc_methods.clone();
         let sub_channels = self.sub_channels.clone();
@@ -506,6 +558,7 @@ impl Server {
                 protocol,
                 reply_ch_tx.clone(),
                 connect_fn,
+                publication_fn,
                 disconnect_fn,
                 rpc_methods,
                 sub_channels,
