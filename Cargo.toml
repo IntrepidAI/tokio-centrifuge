@@ -1,6 +1,8 @@
 [package]
 name = "tokio-centrifuge"
+description = "Unofficial Rust Client SDK for Centrifugo."
 version = "0.1.0"
+license = "MIT"
 edition = "2024"
 rust-version = "1.85.0"
 
