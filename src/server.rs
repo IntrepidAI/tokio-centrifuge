@@ -41,8 +41,64 @@ impl Display for ClientId {
     }
 }
 
-const PING_INTERVAL: Duration = Duration::from_secs(25);
-const PING_TIMEOUT: Duration = Duration::from_secs(10);
+#[derive(Debug, Clone, Copy)]
+pub struct ServeParams {
+    pub client_id: Option<ClientId>,
+    pub encoding: Protocol,
+    pub ping_interval: Option<Duration>,
+    pub pong_timeout: Option<Duration>,
+}
+
+impl ServeParams {
+    pub fn json() -> Self {
+        Self {
+            encoding: Protocol::Json,
+            ..Default::default()
+        }
+    }
+
+    pub fn protobuf() -> Self {
+        Self {
+            encoding: Protocol::Protobuf,
+            ..Default::default()
+        }
+    }
+
+    pub fn with_client_id(self, client_id: ClientId) -> Self {
+        Self {
+            client_id: Some(client_id),
+            ..self
+        }
+    }
+
+    pub fn without_ping(self) -> Self {
+        Self {
+            ping_interval: None,
+            pong_timeout: None,
+            ..self
+        }
+    }
+}
+
+impl Default for ServeParams {
+    fn default() -> Self {
+        Self {
+            client_id: None,
+            encoding: Protocol::Json,
+            ping_interval: Some(Duration::from_secs(25)),
+            pong_timeout: Some(Duration::from_secs(10)),
+        }
+    }
+}
+
+impl From<Protocol> for ServeParams {
+    fn from(protocol: Protocol) -> Self {
+        Self {
+            encoding: protocol,
+            ..Default::default()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionState {
@@ -63,8 +119,7 @@ impl Drop for Subscription {
 }
 
 struct ServerSession {
-    client_id: ClientId,
-    encoding: Protocol,
+    params: ServeParams,
     state: SessionState,
     on_connect: OnConnectFn,
     on_publication: Option<PublishFn>,
@@ -80,8 +135,7 @@ struct ServerSession {
 impl ServerSession {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        client_id: ClientId,
-        encoding: Protocol,
+        params: ServeParams,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         on_connect: OnConnectFn,
         on_publication: Option<PublishFn>,
@@ -92,11 +146,10 @@ impl ServerSession {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
-            encoding,
+            params,
             on_connect,
             on_publication,
             on_disconnect,
-            client_id,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             rpc_methods,
@@ -116,7 +169,7 @@ impl ServerSession {
                     Command::Connect(connect) => {
                         log::debug!("connection established with name={}, version={}", connect.name, connect.version);
                         match (self.on_connect)(ConnectContext {
-                            client_id: self.client_id,
+                            client_id: self.params.client_id.unwrap(),
                             client_name: connect.name,
                             client_version: connect.version,
                             token: connect.token,
@@ -132,9 +185,9 @@ impl ServerSession {
 
                         self.state = SessionState::Connected;
                         let _ = self.reply_ch.send(Ok((id, Reply::Connect(ConnectResult {
-                            client: self.client_id.to_string(),
-                            ping: PING_INTERVAL.as_secs() as u32,
-                            pong: true,
+                            client: self.params.client_id.unwrap().to_string(),
+                            ping: self.params.ping_interval.unwrap_or(Duration::ZERO).as_secs() as u32,
+                            pong: self.params.pong_timeout.is_some(),
                             ..Default::default()
                         })))).await;
                     }
@@ -170,8 +223,8 @@ impl ServerSession {
                         };
 
                         let reply_ch = self.reply_ch.clone();
-                        let client_id = self.client_id;
-                        let encoding = self.encoding;
+                        let client_id = self.params.client_id.unwrap();
+                        let encoding = self.params.encoding;
                         self.tasks.spawn(async move {
                             let (match_params, f) = match_;
                             let result = f(RpcContext { encoding, client_id, params: match_params }, rpc_request.data).await;
@@ -218,8 +271,8 @@ impl ServerSession {
 
                             let reply_ch = self.reply_ch.clone();
                             let channel_name = sub_request.channel.clone();
-                            let client_id = self.client_id;
-                            let encoding = self.encoding;
+                            let client_id = self.params.client_id.unwrap();
+                            let encoding = self.params.encoding;
                             let subscriptions_ = self.subscriptions.clone();
                             let (input_ch_tx, input_ch_rx) = tokio::sync::mpsc::channel(64);
 
@@ -290,8 +343,8 @@ impl ServerSession {
 
                         let response = if let Some(on_publication) = self.on_publication.clone() {
                             let reply_ch = self.reply_ch.clone();
-                            let encoding = self.encoding;
-                            let client_id = self.client_id;
+                            let encoding = self.params.encoding;
+                            let client_id = self.params.client_id.unwrap();
 
                             self.tasks.spawn(async move {
                                 let response = match on_publication(PublishContext {
@@ -363,7 +416,7 @@ impl Drop for ServerSession {
     fn drop(&mut self) {
         if self.state == SessionState::Connected {
             if let Some(on_disconnect) = &self.on_disconnect {
-                on_disconnect(DisconnectContext { client_id: self.client_id });
+                on_disconnect(DisconnectContext { client_id: self.params.client_id.unwrap() });
             }
         }
     }
@@ -525,21 +578,16 @@ impl Server {
         self.sub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
-    pub async fn serve<S>(&self, stream: S, protocol: Protocol)
+    pub async fn serve<S>(&self, stream: S, mut params: ServeParams)
     where
         S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
     {
-        self.serve_with_client_id(stream, protocol, ClientId::new()).await;
-    }
+        params.client_id = Some(params.client_id.unwrap_or_default());
 
-    pub async fn serve_with_client_id<S>(&self, stream: S, protocol: Protocol, client_id: ClientId)
-    where
-        S: Stream<Item = Result<Message, WsError>> + Sink<Message> + Send + Unpin + 'static,
-    {
         let (mut write_ws, mut read_ws) = stream.split();
         let (closer_tx, mut closer_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-        let mut ping_timer = tokio::time::interval(PING_INTERVAL);
+        let mut ping_timer = tokio::time::interval(params.ping_interval.unwrap_or(Duration::MAX));
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let connect_fn = self.on_connect.0.clone();
@@ -550,12 +598,11 @@ impl Server {
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);
 
         let reader_task = tokio::spawn(async move {
-            let mut timer_send_ping = Box::pin(tokio::time::sleep(PING_INTERVAL + PING_TIMEOUT));
-            let mut timer_expect_pong = Box::pin(tokio::time::sleep(PING_TIMEOUT));
+            let mut timer_send_ping = Box::pin(tokio::time::sleep(Duration::MAX));
+            let mut timer_expect_pong = Box::pin(tokio::time::sleep(Duration::MAX));
 
             let mut session = ServerSession::new(
-                client_id,
-                protocol,
+                params,
                 reply_ch_tx.clone(),
                 connect_fn,
                 publication_fn,
@@ -572,11 +619,17 @@ impl Server {
                         break 'outer DisconnectErrorCode::ConnectionClosed;
                     }
 
-                    _ = timer_send_ping.as_mut() => {
+                    _ = &mut timer_send_ping => {
                         if session.state() == SessionState::Connected {
                             let _ = reply_ch_tx.send(Ok((0, Reply::Empty))).await;
                         }
-                        timer_send_ping.as_mut().reset(Instant::now() + PING_INTERVAL + PING_TIMEOUT);
+                        timer_send_ping.as_mut().reset(
+                            Instant::now()
+                                .checked_add(params.ping_interval.unwrap_or(Duration::MAX))
+                                .unwrap_or(far_future())
+                                .checked_add(params.pong_timeout.unwrap_or(Duration::MAX))
+                                .unwrap_or(far_future())
+                        );
                     }
 
                     remote_msg = read_ws.next() => {
@@ -596,7 +649,7 @@ impl Server {
 
                         let mut commands = Vec::new();
 
-                        let _ = decode_frames(&data, protocol, |result| {
+                        let _ = decode_frames(&data, params.encoding, |result| {
                             let result: RawCommand = result?;
                             let frame_id = result.id;
                             let frame: Command = result.into();
@@ -607,14 +660,34 @@ impl Server {
                         for (frame_id, frame) in commands {
                             if session.state() == SessionState::Initial {
                                 if let Command::Connect(_) = frame {
-                                    timer_send_ping.as_mut().reset(Instant::now() + PING_INTERVAL);
-                                    timer_expect_pong.as_mut().reset(Instant::now() + PING_INTERVAL + PING_TIMEOUT);
+                                    timer_send_ping.as_mut().reset(
+                                        Instant::now()
+                                            .checked_add(params.ping_interval.unwrap_or(Duration::MAX))
+                                            .unwrap_or(far_future())
+                                    );
+                                    timer_expect_pong.as_mut().reset(
+                                        Instant::now()
+                                            .checked_add(params.ping_interval.unwrap_or(Duration::MAX))
+                                            .unwrap_or(far_future())
+                                            .checked_add(params.pong_timeout.unwrap_or(Duration::MAX))
+                                            .unwrap_or(far_future())
+                                    );
                                 }
                             }
 
                             if let Command::Empty = frame {
-                                timer_send_ping.as_mut().reset(Instant::now() + PING_INTERVAL);
-                                timer_expect_pong.as_mut().reset(Instant::now() + PING_INTERVAL + PING_TIMEOUT);
+                                timer_send_ping.as_mut().reset(
+                                    Instant::now()
+                                        .checked_add(params.ping_interval.unwrap_or(Duration::MAX))
+                                        .unwrap_or(far_future())
+                                );
+                                timer_expect_pong.as_mut().reset(
+                                    Instant::now()
+                                        .checked_add(params.ping_interval.unwrap_or(Duration::MAX))
+                                        .unwrap_or(far_future())
+                                        .checked_add(params.pong_timeout.unwrap_or(Duration::MAX))
+                                        .unwrap_or(far_future())
+                                );
                                 continue;
                             }
 
@@ -662,7 +735,7 @@ impl Server {
                     }
                 }
 
-                let data = encode_frames(&replies, protocol, |_id| {
+                let data = encode_frames(&replies, params.encoding, |_id| {
                     error = Some(DisconnectErrorCode::InappropriateProtocol);
                 });
                 if let Some(data) = data {
@@ -695,4 +768,13 @@ impl Server {
             log::debug!("failed to join reader and writer tasks");
         }
     }
+}
+
+// see tokio Instant impl
+fn far_future() -> Instant {
+    // Roughly 30 years from now.
+    // API does not provide a way to obtain max `Instant`
+    // or convert specific date in the future to instant.
+    // 1000 years overflows on macOS, 100 years overflows on FreeBSD.
+    Instant::now() + Duration::from_secs(86400 * 365 * 30)
 }

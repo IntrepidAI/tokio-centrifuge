@@ -117,7 +117,7 @@ async fn main() {
         tokio::task::spawn(async move {
             let Ok(stream) = tokio_tungstenite::accept_async(stream).await
                 .map_err(|err| log::error!("error: {:?}", err)) else { return };
-            server.serve(stream, tokio_centrifuge::config::Protocol::Json).await;
+            server.serve(stream, tokio_centrifuge::config::Protocol::Json.into()).await;
             log::info!("closed connection with: {}", addr);
         });
     }
