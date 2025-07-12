@@ -79,7 +79,7 @@ async fn main() {
         let req: TestRequest = decode_json(&req)?;
         log::debug!("rpc method test called: {:?}, id={:?}", &req, ctx.params.get("id"));
         tokio::time::sleep(Duration::from_secs(2)).await;
-        encode_json(TestResponse {
+        encode_json(&TestResponse {
             world: req.hello.to_string(),
         })
     }).unwrap();
@@ -92,7 +92,7 @@ async fn main() {
         tokio::time::sleep(Duration::from_secs(2)).await;
         log::debug!("channel test_channel connected");
         Ok(TestStream::new(Duration::from_millis(500)).filter_map(async move |item| {
-            encode_json(item).ok()
+            encode_json(&item).ok()
         }))
     }).unwrap();
 
@@ -107,7 +107,7 @@ async fn main() {
             //     yield TestStreamItem { foobar: i };
             // }
         }.filter_map(async move |item| {
-            encode_json(item).ok()
+            encode_json(&item).ok()
         }))
     }).unwrap();
 

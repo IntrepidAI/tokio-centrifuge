@@ -24,8 +24,8 @@ pub fn decode_json<T: serde::de::DeserializeOwned>(mut data: &[u8]) -> Result<T,
     })
 }
 
-pub fn encode_json<T: serde::Serialize>(data: T) -> Result<Vec<u8>, ClientError> {
-    serde_json::to_vec(&data).map_err(|err| ClientError::internal(err.to_string()))
+pub fn encode_json<T: serde::Serialize>(data: &T) -> Result<Vec<u8>, ClientError> {
+    serde_json::to_vec(data).map_err(|err| ClientError::internal(err.to_string()))
 }
 
 pub fn decode_proto<T: prost::Message + Default>(data: &[u8]) -> Result<T, ClientError> {
@@ -35,7 +35,7 @@ pub fn decode_proto<T: prost::Message + Default>(data: &[u8]) -> Result<T, Clien
     })
 }
 
-pub fn encode_proto<T: prost::Message>(data: T) -> Result<Vec<u8>, ClientError> {
+pub fn encode_proto<T: prost::Message>(data: &T) -> Result<Vec<u8>, ClientError> {
     let mut buf = Vec::new();
     data.encode(&mut buf).map_err(|_| ClientError {
         code: ClientErrorCode::Internal,
@@ -51,7 +51,7 @@ pub fn decode_with<T: DeserializeOwned + prost::Message + Default>(data: &[u8], 
     }
 }
 
-pub fn encode_with<T: Serialize + prost::Message>(data: T, protocol: Protocol) -> Result<Vec<u8>, ClientError> {
+pub fn encode_with<T: Serialize + prost::Message>(data: &T, protocol: Protocol) -> Result<Vec<u8>, ClientError> {
     match protocol {
         Protocol::Json => encode_json(data),
         Protocol::Protobuf => encode_proto(data),
