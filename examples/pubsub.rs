@@ -1,5 +1,7 @@
 use tokio_centrifuge::client::Client;
 use tokio_centrifuge::config::Config;
+use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
@@ -8,10 +10,14 @@ async fn main() {
         hello: i32,
     }
 
-    simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .with_module_level("tokio_centrifuge", log::LevelFilter::Trace)
-        .init().unwrap();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            Targets::new()
+                .with_default(LevelFilter::INFO)
+                .with_target("tokio_centrifuge", LevelFilter::TRACE)
+        )
+        .init();
 
     let client = Client::new(
         "ws://localhost:8000/connection/websocket?format=protobuf",

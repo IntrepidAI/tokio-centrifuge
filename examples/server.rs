@@ -6,6 +6,8 @@ use tokio::net::TcpListener;
 use tokio_centrifuge::errors::DisconnectErrorCode;
 use tokio_centrifuge::server::{ConnectContext, Server};
 use tokio_centrifuge::utils::{decode_json, encode_json};
+use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::prelude::*;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TestStreamItem {
@@ -49,10 +51,14 @@ impl futures::Stream for TestStream {
 
 #[tokio::main]
 async fn main() {
-    simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .with_module_level("tokio_centrifuge", log::LevelFilter::Trace)
-        .init().unwrap();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            Targets::new()
+                .with_default(LevelFilter::INFO)
+                .with_target("tokio_centrifuge", LevelFilter::TRACE)
+        )
+        .init();
 
     let listener = TcpListener::bind("127.0.0.1:8001").await.unwrap();
     log::info!("listening on: {}", listener.local_addr().unwrap());
