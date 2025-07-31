@@ -6,7 +6,7 @@ use serde::Serialize;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::Protocol;
-use crate::errors::{ClientError, ClientErrorCode};
+use crate::errors::ClientError;
 
 // same as serde_json::from_slice, but handles empty data correctly
 pub fn decode_json<T: serde::de::DeserializeOwned>(mut data: &[u8]) -> Result<T, ClientError> {
@@ -17,10 +17,7 @@ pub fn decode_json<T: serde::de::DeserializeOwned>(mut data: &[u8]) -> Result<T,
     }
 
     serde_json::from_slice(data).map_err(|err| {
-        ClientError {
-            code: ClientErrorCode::BadRequest,
-            message: err.to_string(),
-        }
+        ClientError::bad_request(err.to_string())
     })
 }
 
@@ -29,18 +26,12 @@ pub fn encode_json<T: serde::Serialize>(data: &T) -> Result<Vec<u8>, ClientError
 }
 
 pub fn decode_proto<T: prost::Message + Default>(data: &[u8]) -> Result<T, ClientError> {
-    T::decode(data).map_err(|_| ClientError {
-        code: ClientErrorCode::BadRequest,
-        message: "failed to decode protobuf".to_owned(),
-    })
+    T::decode(data).map_err(|_| ClientError::bad_request("failed to decode protobuf"))
 }
 
 pub fn encode_proto<T: prost::Message>(data: &T) -> Result<Vec<u8>, ClientError> {
     let mut buf = Vec::new();
-    data.encode(&mut buf).map_err(|_| ClientError {
-        code: ClientErrorCode::Internal,
-        message: "failed to encode protobuf".to_owned(),
-    })?;
+    data.encode(&mut buf).map_err(|_| ClientError::internal("failed to encode protobuf"))?;
     Ok(buf)
 }
 

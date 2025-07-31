@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use thiserror::Error;
@@ -12,15 +13,12 @@ pub enum RemoveSubscriptionError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientError {
     pub code: ClientErrorCode,
-    pub message: String,
+    pub message: Cow<'static, str>,
 }
 
 impl From<anyhow::Error> for ClientError {
     fn from(err: anyhow::Error) -> Self {
-        Self {
-            code: ClientErrorCode::Internal,
-            message: err.to_string(),
-        }
+        Self::internal(err.to_string())
     }
 }
 
@@ -28,27 +26,76 @@ impl From<ClientError> for crate::protocol::Error {
     fn from(err: ClientError) -> Self {
         Self {
             code: err.code.0.into(),
-            message: err.message,
+            message: err.message.into_owned(),
             temporary: err.code.is_temporary(),
         }
     }
 }
 
 impl ClientError {
-    pub fn internal(message: impl Into<String>) -> Self {
+    pub fn new(code: ClientErrorCode, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
-            code: ClientErrorCode::Internal,
+            code,
             message: message.into(),
         }
+    }
+
+    pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::Internal, message)
+    }
+
+    pub fn unauthorized(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::Unauthorized, message)
+    }
+
+    pub fn unknown_channel(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::UnknownChannel, message)
+    }
+
+    pub fn permission_denied(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::PermissionDenied, message)
+    }
+
+    pub fn method_not_found(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::MethodNotFound, message)
+    }
+
+    pub fn already_subscribed(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::AlreadySubscribed, message)
+    }
+
+    pub fn limit_exceeded(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::LimitExceeded, message)
+    }
+
+    pub fn bad_request(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::BadRequest, message)
+    }
+
+    pub fn not_available(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::NotAvailable, message)
+    }
+
+    pub fn token_expired(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::TokenExpired, message)
+    }
+
+    pub fn expired(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::Expired, message)
+    }
+
+    pub fn too_many_requests(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::TooManyRequests, message)
+    }
+
+    pub fn unrecoverable_position(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(ClientErrorCode::UnrecoverablePosition, message)
     }
 }
 
 impl From<ClientErrorCode> for ClientError {
     fn from(code: ClientErrorCode) -> Self {
-        Self {
-            code,
-            message: code.to_string(),
-        }
+        Self::new(code, code.to_str())
     }
 }
 
@@ -74,26 +121,30 @@ impl ClientErrorCode {
     pub fn is_temporary(self) -> bool {
         matches!(self, Self::Internal | Self::TooManyRequests)
     }
+
+    pub fn to_str(&self) -> Cow<'static, str> {
+        match self.0 {
+            100 => Cow::Borrowed("internal server error"),
+            101 => Cow::Borrowed("unauthorized"),
+            102 => Cow::Borrowed("unknown channel"),
+            103 => Cow::Borrowed("permission denied"),
+            104 => Cow::Borrowed("method not found"),
+            105 => Cow::Borrowed("already subscribed"),
+            106 => Cow::Borrowed("limit exceeded"),
+            107 => Cow::Borrowed("bad request"),
+            108 => Cow::Borrowed("not available"),
+            109 => Cow::Borrowed("token expired"),
+            110 => Cow::Borrowed("expired"),
+            111 => Cow::Borrowed("too many requests"),
+            112 => Cow::Borrowed("unrecoverable position"),
+            _ => Cow::Owned(format!("unknown code {}", self.0)),
+        }
+    }
 }
 
 impl Display for ClientErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            100 => write!(f, "internal server error"),
-            101 => write!(f, "unauthorized"),
-            102 => write!(f, "unknown channel"),
-            103 => write!(f, "permission denied"),
-            104 => write!(f, "method not found"),
-            105 => write!(f, "already subscribed"),
-            106 => write!(f, "limit exceeded"),
-            107 => write!(f, "bad request"),
-            108 => write!(f, "not available"),
-            109 => write!(f, "token expired"),
-            110 => write!(f, "expired"),
-            111 => write!(f, "too many requests"),
-            112 => write!(f, "unrecoverable position"),
-            _ => write!(f, "unknown code {}", self.0),
-        }
+        write!(f, "{}", self.to_str())
     }
 }
 

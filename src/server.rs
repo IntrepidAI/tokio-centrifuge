@@ -374,10 +374,7 @@ impl ServerSession {
                                     let response = match client_stream.send(pub_request.data).await {
                                         Ok(()) => Reply::Publish(PublishResult {}),
                                         Err(err) => {
-                                            Reply::Error(ClientError {
-                                                code: ClientErrorCode::Internal,
-                                                message: err.to_string(),
-                                            }.into())
+                                            Reply::Error(ClientError::internal(err.to_string()).into())
                                         }
                                     };
                                     drop(permit);
@@ -387,10 +384,7 @@ impl ServerSession {
 
                                 None
                             } else {
-                                Some(Reply::Error(ClientError {
-                                    code: ClientErrorCode::PermissionDenied,
-                                    message: "not subscribed".to_string(),
-                                }.into()))
+                                Some(Reply::Error(ClientError::permission_denied("not subscribed").into()))
                             }
                         };
 
