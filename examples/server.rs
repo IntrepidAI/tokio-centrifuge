@@ -102,19 +102,33 @@ async fn main() {
         }))
     }).unwrap();
 
-    server.add_channel("echo_channel", async |mut ctx| {
-        Ok(async_stream::stream! {
-            while let Some(msg) = ctx.stream.recv().await {
-                yield serde_json::from_slice(&msg).unwrap_or(serde_json::Value::Null);
-            }
+    let (echo_channel_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(16);
 
-            // for i in 0.. {
-            //     tokio::time::sleep(Duration::from_millis(500)).await;
-            //     yield TestStreamItem { foobar: i };
-            // }
-        }.filter_map(async move |item| {
-            encode_json(&item).ok()
-        }))
+    let echo_channel_tx_ = echo_channel_tx.clone();
+    server.add_channel("echo_channel", move |mut _ctx| {
+        let mut echo_channel_rx = echo_channel_tx_.subscribe();
+
+        async move {
+            Ok(async_stream::stream! {
+                while let Ok(msg) = echo_channel_rx.recv().await {
+                    yield msg;
+                }
+
+                // for i in 0.. {
+                //     tokio::time::sleep(Duration::from_millis(500)).await;
+                //     yield TestStreamItem { foobar: i };
+                // }
+            })
+        }
+    }).unwrap();
+
+    server.on_publication("echo_channel", move |_ctx, data| {
+        let echo_channel_tx = echo_channel_tx.clone();
+
+        async move {
+            let _ = echo_channel_tx.send(data);
+            Ok(())
+        }
     }).unwrap();
 
     while let Ok((stream, addr)) = listener.accept().await {

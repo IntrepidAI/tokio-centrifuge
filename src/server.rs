@@ -108,7 +108,6 @@ enum SessionState {
 }
 
 struct Subscription {
-    client_stream: tokio::sync::mpsc::Sender<Vec<u8>>,
     abort_handle: AbortHandle,
 }
 
@@ -122,11 +121,11 @@ struct ServerSession {
     params: ServeParams,
     state: SessionState,
     on_connect: OnConnectFn,
-    on_publication: Option<PublishFn>,
     on_disconnect: Option<OnDisconnectFn>,
     rpc_semaphore: Arc<Semaphore>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
+    pub_channels: Arc<Mutex<Router<PublishFn>>>,
     subscriptions: Arc<Mutex<HashMap<String, Subscription>>>,
     tasks: JoinSet<()>,
     reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
@@ -138,22 +137,22 @@ impl ServerSession {
         params: ServeParams,
         reply_ch: tokio::sync::mpsc::Sender<Result<(u32, Reply), DisconnectErrorCode>>,
         on_connect: OnConnectFn,
-        on_publication: Option<PublishFn>,
         on_disconnect: Option<OnDisconnectFn>,
         rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
         sub_channels: Arc<Mutex<Router<ChannelFn>>>,
+        pub_channels: Arc<Mutex<Router<PublishFn>>>,
     ) -> Self {
         const MAX_CONCURRENT_REQUESTS: usize = 10;
 
         Self {
             params,
             on_connect,
-            on_publication,
             on_disconnect,
             state: SessionState::Initial,
             rpc_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             rpc_methods,
             sub_channels,
+            pub_channels,
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
             tasks: JoinSet::new(),
             reply_ch,
@@ -227,10 +226,54 @@ impl ServerSession {
                         let encoding = self.params.encoding;
                         self.tasks.spawn(async move {
                             let (match_params, f) = match_;
-                            let result = f(RpcContext { encoding, client_id, params: match_params }, rpc_request.data).await;
+                            let result = f(RpcContext {
+                                encoding,
+                                client_id,
+                                params: match_params,
+                            }, rpc_request.data).await;
                             match result {
                                 Ok(data) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Rpc(RpcResult { data })))).await;
+                                }
+                                Err(err) => {
+                                    let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
+                                }
+                            }
+                            drop(permit);
+                        });
+                    }
+                    Command::Publish(pub_request) => {
+                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
+
+                        let Some(match_) = ({
+                            let methods = self.pub_channels.lock().unwrap();
+                            match methods.at(&pub_request.channel) {
+                                Ok(match_) => {
+                                    let params: HashMap<String, String> = match_.params.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+                                    Some((params, match_.value.clone()))
+                                }
+                                Err(_err) => {
+                                    None
+                                }
+                            }
+                        }) else {
+                            let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::UnknownChannel.into())))).await;
+                            return;
+                        };
+
+                        let reply_ch = self.reply_ch.clone();
+                        let client_id = self.params.client_id.unwrap();
+                        let encoding = self.params.encoding;
+                        self.tasks.spawn(async move {
+                            let (match_params, f) = match_;
+                            let result = f(PublishContext {
+                                encoding,
+                                client_id,
+                                params: match_params,
+                            }, pub_request.data).await;
+                            match result {
+                                Ok(()) => {
+                                    let _ = reply_ch.send(Ok((id, Reply::Publish(PublishResult {})))).await;
                                 }
                                 Err(err) => {
                                     let _ = reply_ch.send(Ok((id, Reply::Error(err.into())))).await;
@@ -274,7 +317,6 @@ impl ServerSession {
                             let client_id = self.params.client_id.unwrap();
                             let encoding = self.params.encoding;
                             let subscriptions_ = self.subscriptions.clone();
-                            let (input_ch_tx, input_ch_rx) = tokio::sync::mpsc::channel(64);
 
                             let abort_handle = self.tasks.spawn(async move {
                                 let (match_params, f) = match_;
@@ -283,7 +325,6 @@ impl ServerSession {
                                     client_id,
                                     params: match_params,
                                     data: sub_request.data,
-                                    stream: input_ch_rx,
                                 }).await {
                                     Ok(stream) => stream,
                                     Err(err) => {
@@ -317,7 +358,6 @@ impl ServerSession {
                                 })))).await;
                             });
                             subscriptions.insert(sub_request.channel, Subscription {
-                                client_stream: input_ch_tx,
                                 abort_handle,
                             });
                             None
@@ -337,60 +377,6 @@ impl ServerSession {
                         };
 
                         let _ = self.reply_ch.send(Ok((id, reply))).await;
-                    }
-                    Command::Publish(pub_request) => {
-                        let permit = self.rpc_semaphore.clone().acquire_owned().await;
-
-                        let response = if let Some(on_publication) = self.on_publication.clone() {
-                            let reply_ch = self.reply_ch.clone();
-                            let encoding = self.params.encoding;
-                            let client_id = self.params.client_id.unwrap();
-
-                            self.tasks.spawn(async move {
-                                let response = match on_publication(PublishContext {
-                                    encoding,
-                                    client_id,
-                                    channel: pub_request.channel,
-                                    data: pub_request.data,
-                                }).await {
-                                    Ok(()) => Reply::Publish(PublishResult {}),
-                                    Err(err) => {
-                                        Reply::Error(err.into())
-                                    }
-                                };
-                                drop(permit);
-
-                                let _ = reply_ch.send(Ok((id, response))).await;
-                            });
-
-                            None
-                        } else {
-                            let subscriptions = self.subscriptions.lock().unwrap();
-                            if let Some(sub) = subscriptions.get(&pub_request.channel) {
-                                let reply_ch = self.reply_ch.clone();
-                                let client_stream = sub.client_stream.clone();
-
-                                self.tasks.spawn(async move {
-                                    let response = match client_stream.send(pub_request.data).await {
-                                        Ok(()) => Reply::Publish(PublishResult {}),
-                                        Err(err) => {
-                                            Reply::Error(ClientError::internal(err.to_string()).into())
-                                        }
-                                    };
-                                    drop(permit);
-
-                                    let _ = reply_ch.send(Ok((id, response))).await;
-                                });
-
-                                None
-                            } else {
-                                Some(Reply::Error(ClientError::permission_denied("not subscribed").into()))
-                            }
-                        };
-
-                        if let Some(response) = response {
-                            let _ = self.reply_ch.send(Ok((id, response))).await;
-                        }
                     }
                     _ => {
                         let _ = self.reply_ch.send(Ok((id, Reply::Error(ClientErrorCode::NotAvailable.into())))).await;
@@ -443,15 +429,13 @@ pub struct SubContext {
     pub client_id: ClientId,
     pub params: HashMap<String, String>,
     pub data: Vec<u8>,
-    pub stream: tokio::sync::mpsc::Receiver<Vec<u8>>,
 }
 
 #[derive(Debug)]
 pub struct PublishContext {
     pub encoding: Protocol,
     pub client_id: ClientId,
-    pub channel: String,
-    pub data: Vec<u8>,
+    pub params: HashMap<String, String>,
 }
 
 type OnConnectFn = Arc<
@@ -461,7 +445,7 @@ type OnConnectFn = Arc<
 >;
 
 type PublishFn = Arc<
-    dyn Fn(PublishContext) ->
+    dyn Fn(PublishContext, Vec<u8>) ->
         Pin<Box<dyn Future<Output = Result<(), ClientError>> + Send>>
     + Send + Sync
 >;
@@ -506,10 +490,10 @@ impl Default for ConnectFnWrapper {
 #[derive(Default, Clone)]
 pub struct Server {
     on_connect: ConnectFnWrapper,
-    on_publication: Option<PublishFn>,
     on_disconnect: Option<OnDisconnectFn>,
     rpc_methods: Arc<Mutex<Router<RpcMethodFn>>>,
     sub_channels: Arc<Mutex<Router<ChannelFn>>>,
+    pub_channels: Arc<Mutex<Router<PublishFn>>>,
 }
 
 impl Server {
@@ -523,15 +507,6 @@ impl Server {
     {
         self.on_connect = ConnectFnWrapper(Arc::new(move |ctx: ConnectContext| {
             Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), DisconnectErrorCode>> + Send>>
-        }));
-    }
-
-    pub fn on_publication<Fut>(&mut self, f: impl Fn(PublishContext) -> Fut + Send + Sync + 'static)
-    where
-        Fut: std::future::Future<Output = Result<(), ClientError>> + Send + 'static,
-    {
-        self.on_publication = Some(Arc::new(move |ctx: PublishContext| {
-            Box::pin(f(ctx)) as Pin<Box<dyn Future<Output = Result<(), ClientError>> + Send>>
         }));
     }
 
@@ -551,6 +526,20 @@ impl Server {
             Box::pin(f(ctx, data))
         });
         self.rpc_methods.lock().unwrap().insert(name.to_string(), wrap_f)
+    }
+
+    pub fn on_publication<Fut>(
+        &self,
+        name: &str,
+        f: impl Fn(PublishContext, Vec<u8>) -> Fut + Send + Sync + 'static,
+    ) -> Result<(), InsertError>
+    where
+        Fut: std::future::Future<Output = Result<(), ClientError>> + Send + 'static,
+    {
+        let wrap_f: PublishFn = Arc::new(move |ctx: PublishContext, data: Vec<u8>| {
+            Box::pin(f(ctx, data))
+        });
+        self.pub_channels.lock().unwrap().insert(name.to_string(), wrap_f)
     }
 
     pub fn add_channel<Fut, St>(
@@ -585,10 +574,10 @@ impl Server {
         ping_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let connect_fn = self.on_connect.0.clone();
-        let publication_fn = self.on_publication.clone();
         let disconnect_fn = self.on_disconnect.clone();
         let rpc_methods = self.rpc_methods.clone();
         let sub_channels = self.sub_channels.clone();
+        let pub_channels = self.pub_channels.clone();
         let (reply_ch_tx, mut reply_ch_rx) = tokio::sync::mpsc::channel(64);
 
         let reader_task = tokio::spawn(async move {
@@ -599,10 +588,10 @@ impl Server {
                 params,
                 reply_ch_tx.clone(),
                 connect_fn,
-                publication_fn,
                 disconnect_fn,
                 rpc_methods,
                 sub_channels,
+                pub_channels,
             );
 
             let error_code = 'outer: loop {
