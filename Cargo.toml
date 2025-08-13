@@ -9,7 +9,7 @@ rust-version = "1.85.0"
 repository = "https://github.com/IntrepidAI/tokio-centrifuge"
 homepage = "https://github.com/IntrepidAI/tokio-centrifuge"
 documentation = "https://docs.rs/tokio-centrifuge"
-keywords = ["centrifugo", "websocket", "realtime", "messaging", "pubsub", "async", "tokio"]
+keywords = ["centrifugo", "websocket", "realtime", "pubsub", "tokio"]
 categories = ["asynchronous", "network-programming", "web-programming"]
 readme = "README.md"
 
