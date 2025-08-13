@@ -15,13 +15,13 @@ async fn main() {
         .with(
             Targets::new()
                 .with_default(LevelFilter::INFO)
-                .with_target("tokio_centrifuge", LevelFilter::TRACE)
+                .with_target("tokio_centrifuge", LevelFilter::TRACE),
         )
         .init();
 
     let client = Client::new(
         "ws://localhost:8000/connection/websocket?format=protobuf",
-        Config::new().use_protobuf()
+        Config::new().use_protobuf(),
     );
 
     client.on_connecting(|| {

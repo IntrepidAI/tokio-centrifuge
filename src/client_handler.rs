@@ -1,3 +1,22 @@
+//! # Client Handler Module
+//!
+//! This module handles the WebSocket communication layer for client connections.
+//! It manages message reading/writing, reply tracking, and connection lifecycle
+//! for client connections to Centrifugo servers.
+//!
+//! ## Core Functionality
+//!
+//! - **WebSocket Handler**: Main function for managing client WebSocket connections
+//! - **Reply Tracking**: Maps request IDs to response channels
+//! - **Message Processing**: Handles incoming replies and push notifications
+//! - **Connection Health**: Manages ping/pong and connection monitoring
+//!
+//! ## Architecture
+//!
+//! The WebSocket handler is split into two main tasks:
+//! - **Reader Task**: Processes incoming WebSocket messages
+//! - **Writer Task**: Sends outgoing commands and manages reply tracking
+
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
@@ -16,16 +35,84 @@ use crate::config::Protocol;
 use crate::protocol::{Command, RawCommand, RawReply, Reply};
 use crate::utils::{decode_frames, encode_frames};
 
+/// Errors that can occur when processing replies
+///
+/// This enum covers various failure scenarios in reply handling,
+/// including timeouts, connection issues, and protocol violations.
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyError {
+    /// The request timed out waiting for a response
     #[error("request timed out")]
     Timeout,
+    /// The connection was closed before receiving a reply
     #[error("connection closed")]
     Closed,
+    /// The protocol used is inappropriate for the request
     #[error("inappropriate protocol")]
     InappropriateProtocol,
 }
 
+/// Main WebSocket handler for client connections
+///
+/// This function manages the complete WebSocket connection lifecycle for clients,
+/// including message reading/writing, reply tracking, and connection health monitoring.
+///
+/// ## Arguments
+///
+/// * `rt` - Tokio runtime handle for spawning tasks
+/// * `stream` - WebSocket stream to handle
+/// * `control_ch` - Channel for sending commands to the server
+/// * `closer_ch` - Channel for receiving close signals
+/// * `protocol` - Protocol encoding to use (JSON/Protobuf)
+/// * `on_push` - Callback for handling push notifications
+/// * `on_error` - Callback for handling errors
+///
+/// ## Returns
+///
+/// Returns `true` if the connection should be reconnected, `false` otherwise.
+///
+/// ## Features
+///
+/// - **Bidirectional Communication**: Handles both incoming and outgoing messages
+/// - **Reply Tracking**: Maps request IDs to response channels for correlation
+/// - **Push Notifications**: Processes server-initiated messages
+/// - **Connection Health**: Manages ping/pong for connection monitoring
+/// - **Error Handling**: Graceful error handling and connection cleanup
+///
+/// ## Example
+///
+/// ```rust
+/// use tokio_centrifuge::client_handler::websocket_handler;
+/// use tokio_centrifuge::config::Protocol;
+///
+/// // In a real implementation, you would have these channels and handlers
+/// // let (control_tx, control_rx) = mpsc::channel(64);
+/// // let (closer_tx, closer_rx) = mpsc::channel(1);
+///
+/// // let should_reconnect = websocket_handler(
+/// //     rt,
+/// //     ws_stream,
+/// //     control_rx,
+/// //     closer_rx,
+/// //     Protocol::Json,
+/// //     |push| { /* handle push */ },
+/// //     |err| { /* handle error */ },
+/// // ).await;
+/// ```
+///
+/// ## Task Architecture
+///
+/// The function spawns two main tasks:
+///
+/// 1. **Reader Task**: Processes incoming WebSocket messages
+///    - Handles server replies and push notifications
+///    - Manages reply mapping and correlation
+///    - Monitors connection health
+///
+/// 2. **Writer Task**: Sends outgoing WebSocket messages
+///    - Processes commands from control channel
+///    - Manages reply tracking and timeouts
+///    - Handles WebSocket write operations
 #[allow(clippy::option_map_unit_fn)]
 #[allow(clippy::type_complexity)]
 pub async fn websocket_handler(

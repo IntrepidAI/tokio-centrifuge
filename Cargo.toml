@@ -1,20 +1,29 @@
 [package]
 name = "tokio-centrifuge"
-description = "Unofficial Rust Client SDK for Centrifugo."
+description = "Unofficial Rust Client SDK for Centrifugo - a scalable real-time messaging server."
 version = "0.1.0"
+authors = ["IntrepidAI <https://github.com/IntrepidAI>"]
 license = "MIT"
 edition = "2024"
 rust-version = "1.85.0"
+repository = "https://github.com/IntrepidAI/tokio-centrifuge"
+homepage = "https://github.com/IntrepidAI/tokio-centrifuge"
+documentation = "https://docs.rs/tokio-centrifuge"
+keywords = ["centrifugo", "websocket", "realtime", "messaging", "pubsub", "async", "tokio"]
+categories = ["asynchronous", "network-programming", "web-programming"]
+readme = "README.md"
 
 [[example]]
 name = "pubsub"
 path = "examples/pubsub.rs"
 required-features = ["examples"]
+doc = false
 
 [[example]]
 name = "server"
 path = "examples/server.rs"
 required-features = ["examples"]
+doc = false
 
 [dependencies]
 anyhow = "1.0.98"
@@ -42,5 +51,15 @@ native-tls = ["tokio-tungstenite/native-tls"]
 rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
 
+# Feature descriptions
+__docs_rs = []
+
 [lints.clippy]
 uninlined_format_args = "allow"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.crates-io]
+rust-version = "1.85.0"
