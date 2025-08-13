@@ -49,7 +49,8 @@ async fn main() {
     });
     sub.on_publication(|data| {
         let data: Message = serde_json::from_slice(&data.data).unwrap();
-        log::info!("publication: {:?}", data);
+        log::info!("📨 Message received: {:?}", data);
+        log::info!("📊 Data: hello = {}", data.hello);
     });
     sub.subscribe();
 

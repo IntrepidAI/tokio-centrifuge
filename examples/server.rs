@@ -62,7 +62,7 @@ async fn main() {
         )
         .init();
 
-    let listener = TcpListener::bind("127.0.0.1:8001").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:8000").await.unwrap();
     log::info!("listening on: {}", listener.local_addr().unwrap());
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
