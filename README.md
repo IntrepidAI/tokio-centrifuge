@@ -579,15 +579,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Examples**: Check the `examples/` directory
 - **Tests**: Comprehensive test suite in `tests/`
 
-## 🔮 Roadmap
-
-- [ ] WebSocket compression support
-- [ ] Additional transport protocols
-- [ ] Enhanced monitoring and metrics
-- [ ] More authentication methods
-- [ ] Performance optimizations
-- [ ] Additional protocol features
-
 ---
 
 **Built with ❤️ in Rust**
