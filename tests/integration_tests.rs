@@ -37,11 +37,9 @@ async fn test_basic_client_server_connection() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
+
     // Simple connection handler
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // Start server in separate task
     let server_handle = tokio::spawn(async move {
@@ -66,7 +64,7 @@ async fn test_basic_client_server_connection() {
     // Set up callbacks
     let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let connected_clone = connected.clone();
-    
+
     client.on_connected(move || {
         connected_clone.store(true, std::sync::atomic::Ordering::SeqCst);
     });
@@ -94,10 +92,8 @@ async fn test_rpc_communication() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // Add RPC method
     server
@@ -115,7 +111,11 @@ async fn test_rpc_communication() {
     // Add RPC method with parameters
     server
         .add_rpc_method("hello/{name}", async move |ctx, req| {
-            let name = ctx.params.get("name").map(|s| s.as_str()).unwrap_or("World");
+            let name = ctx
+                .params
+                .get("name")
+                .map(|s| s.as_str())
+                .unwrap_or("World");
             let request: TestRequest = decode_json(&req).unwrap();
             let response = TestResponse {
                 status: "success".to_string(),
@@ -152,23 +152,25 @@ async fn test_rpc_communication() {
         action: "test".to_string(),
         data: "Hello, RPC!".to_string(),
     };
-    
+
     let rpc_result = client.rpc("echo", encode_json(&request).unwrap()).await;
     assert!(rpc_result.is_ok());
-    
+
     let response_data = rpc_result.unwrap();
     let response: TestResponse = decode_json(&response_data).unwrap();
-    
+
     assert_eq!(response.status, "success");
     assert_eq!(response.data, "Hello, RPC!");
 
     // Test RPC with parameters
-    let rpc_result = client.rpc("hello/test_user", encode_json(&request).unwrap()).await;
+    let rpc_result = client
+        .rpc("hello/test_user", encode_json(&request).unwrap())
+        .await;
     assert!(rpc_result.is_ok());
-    
+
     let response_data = rpc_result.unwrap();
     let response: TestResponse = decode_json(&response_data).unwrap();
-    
+
     assert_eq!(response.status, "success");
     assert!(response.message.contains("Hello, test_user!"));
 
@@ -184,10 +186,8 @@ async fn test_pubsub_channels() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // Add channel for subscription
     server
@@ -241,11 +241,11 @@ async fn test_pubsub_channels() {
 
     // Create subscription
     let subscription = client.new_subscription("test_channel");
-    
+
     // Counter for received messages
     let message_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let message_count_clone = message_count.clone();
-    
+
     subscription.on_publication(move |pub_data| {
         let count = message_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         println!("Received publication {}: {:?}", count + 1, pub_data);
@@ -253,10 +253,10 @@ async fn test_pubsub_channels() {
 
     // Subscribe to channel
     subscription.subscribe().await.unwrap();
-    
+
     // Wait for messages
     tokio::time::sleep(Duration::from_millis(500)).await;
-    
+
     // Check that we received messages
     let final_count = message_count.load(std::sync::atomic::Ordering::SeqCst);
     assert!(final_count > 0);
@@ -267,13 +267,15 @@ async fn test_pubsub_channels() {
         content: "Test publication".to_string(),
         timestamp: 1234567890,
     };
-    
-    let publish_result = client.publish("test_channel", encode_json(&message).unwrap()).await;
+
+    let publish_result = client
+        .publish("test_channel", encode_json(&message).unwrap())
+        .await;
     assert!(publish_result.is_ok());
 
     // Unsubscribe
     subscription.unsubscribe().await;
-    
+
     let _ = client.disconnect().await;
     server_handle.abort();
 }
@@ -286,7 +288,7 @@ async fn test_authentication() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
+
     // Connection handler with token validation
     server.on_connect(async move |ctx: ConnectContext| {
         if ctx.token != "valid_token" {
@@ -336,10 +338,8 @@ async fn test_client_reconnection() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     let server_handle = tokio::spawn(async move {
         while let Ok((stream, _addr)) = listener.accept().await {
@@ -358,7 +358,7 @@ async fn test_client_reconnection() {
     let config = Config::new()
         .use_json()
         .with_reconnect_strategy(tokio_centrifuge::config::BackoffReconnect::default());
-    
+
     let client = Client::new(&ws_url, config);
 
     // Connect
@@ -384,10 +384,8 @@ async fn test_multiple_clients() {
     let server_addr = listener.local_addr().unwrap();
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // Channel for echo functionality
     let (echo_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(16);
@@ -438,14 +436,14 @@ async fn test_multiple_clients() {
         let ws_url = format!("ws://{}/connection/websocket", server_addr);
         let config = Config::new().use_json().with_name(format!("client_{}", i));
         let client = Client::new(&ws_url, config);
-        
+
         // Connect
         client.connect().await.unwrap();
-        
+
         // Create subscription
         let subscription = client.new_subscription("echo_channel");
         subscription.subscribe().await.unwrap();
-        
+
         clients.push(client);
         subscriptions.push(subscription);
     }
@@ -458,8 +456,10 @@ async fn test_multiple_clients() {
         content: "Hello from client 0".to_string(),
         timestamp: 1234567890,
     };
-    
-    let publish_result = clients[0].publish("echo_channel", encode_json(&message).unwrap()).await;
+
+    let publish_result = clients[0]
+        .publish("echo_channel", encode_json(&message).unwrap())
+        .await;
     assert!(publish_result.is_ok());
 
     // Wait for message to reach all clients
@@ -481,15 +481,15 @@ async fn test_error_handling() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // RPC method that returns error
     server
         .add_rpc_method("error_method", async move |_ctx, _req| {
-            Err(tokio_centrifuge::errors::ClientError::bad_request("Test error"))
+            Err(tokio_centrifuge::errors::ClientError::bad_request(
+                "Test error",
+            ))
         })
         .unwrap();
 
@@ -542,10 +542,8 @@ async fn test_performance_high_message_volume() {
     let ws_url = format!("ws://{}/connection/websocket", server_addr);
 
     let mut server = Server::new();
-    
-    server.on_connect(async move |_ctx: ConnectContext| {
-        Ok(())
-    });
+
+    server.on_connect(async move |_ctx: ConnectContext| Ok(()));
 
     // Channel for high-load transmission
     server
@@ -587,27 +585,27 @@ async fn test_performance_high_message_volume() {
 
     // Create subscription
     let subscription = client.new_subscription("performance_channel");
-    
+
     let message_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let message_count_clone = message_count.clone();
-    
+
     subscription.on_publication(move |_pub_data| {
         message_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     });
 
     // Subscribe to channel
     subscription.subscribe().await.unwrap();
-    
+
     // Wait for all messages
     tokio::time::sleep(Duration::from_millis(2000)).await;
-    
+
     // Check that we received all messages
     let final_count = message_count.load(std::sync::atomic::Ordering::SeqCst);
     assert!(final_count >= 90); // Should receive most messages
 
     // Unsubscribe
     subscription.unsubscribe().await;
-    
+
     let _ = client.disconnect().await;
     server_handle.abort();
 }

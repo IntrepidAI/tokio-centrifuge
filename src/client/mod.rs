@@ -9,7 +9,7 @@
 //! ```rust
 //! use tokio_centrifuge::client::{Client, State};
 //! use tokio_centrifuge::config::Config;
-//! 
+//!
 //! // Note: In a real application, you would use #[tokio::main] and await
 //! // #[tokio::main]
 //! // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -141,10 +141,10 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // let connect_future = client.connect();
     /// // let result = connect_future.await;
@@ -181,10 +181,10 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // let disconnect_future = client.disconnect();
     /// // disconnect_future.await; // Wait for disconnection to complete
@@ -223,10 +223,10 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // let publish_future = client.publish("news", b"Breaking news!".to_vec());
     /// // let result = publish_future.await;
@@ -286,10 +286,10 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // let rpc_future = client.rpc("getUserInfo", b"user123".to_vec());
     /// // let result = rpc_future.await;
@@ -345,10 +345,10 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // let subscription = client.new_subscription("news");
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // let result = subscription.subscribe().await;
@@ -402,7 +402,7 @@ impl Client {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // #[tokio::main]
     /// // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

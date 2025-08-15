@@ -18,7 +18,10 @@
   "history_ttl": "300s",
   "presence": true,
   "join_leave": true,
+  "log_level" : "trace",
   "allowed_origins": [
     "*"
-  ]
+  ],
+  "ping_interval": "25s",
+  "pong_timeout": "10s"
 }

@@ -10,7 +10,7 @@
 //! use tokio_centrifuge::client::Client;
 //! use tokio_centrifuge::subscription::State;
 //! use tokio_centrifuge::config::Config;
-//! 
+//!
 //! // Note: In a real application, you would use #[tokio::main] and await
 //! // #[tokio::main]
 //! // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -228,7 +228,7 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // #[tokio::main]
     /// // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -283,7 +283,7 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // #[tokio::main]
     /// // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -336,7 +336,7 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// // Note: In a real application, you would use #[tokio::main] and await
     /// // #[tokio::main]
     /// // async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -463,10 +463,10 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // let subscription = client.new_subscription("news");
     /// // subscription.on_unsubscribed(|| {
     /// //     println!("Unsubscribed from news channel");
@@ -493,10 +493,10 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // let subscription = client.new_subscription("news");
     /// // subscription.on_publication(|pub_data| {
     /// //     println!("Received publication: {:?}", pub_data);
@@ -523,10 +523,10 @@ impl Subscription {
     /// ```rust
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // let subscription = client.new_subscription("news");
     /// // subscription.on_error(|err| {
     /// //     eprintln!("Subscription error: {}", err);
@@ -551,10 +551,10 @@ impl Subscription {
     /// use tokio_centrifuge::client::Client;
     /// use tokio_centrifuge::config::Config;
     /// use tokio_centrifuge::subscription::State;
-    /// 
+    ///
     /// let config = Config::new().use_json();
     /// // let client = Client::new("ws://localhost:8000/connection/websocket", config);
-    /// 
+    ///
     /// // let subscription = client.new_subscription("news");
     /// // match subscription.state() {
     /// //     State::Unsubscribed => println!("Not subscribed"),

@@ -17,7 +17,7 @@ use thiserror::Error;
 /// ```rust
 /// use tokio_centrifuge::client::{Client, FutureResult};
 /// use tokio_centrifuge::config::Config;
-/// 
+///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 ///     let config = Config::new().use_json();
@@ -29,13 +29,13 @@ use thiserror::Error;
 ///     Ok(())
 /// }
 /// ```
-/// 
+///
 /// Or convert to a future and await later:
-/// 
+///
 /// ```rust
 /// use tokio_centrifuge::client::{Client, FutureResult};
 /// use tokio_centrifuge::config::Config;
-/// 
+///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 ///     let config = Config::new().use_json();
