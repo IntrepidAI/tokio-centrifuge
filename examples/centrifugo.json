@@ -1,0 +1,27 @@
+{
+  "port": 8000,
+  "admin": true,
+  "http_stream": true,
+  "sse": true,
+  "http3": false,
+  "tls": false,
+  "webtransport": false,
+  "allow_anonymous_connect_without_token": true,
+  "allow_subscribe_for_client": true,
+  "allow_publish_for_client": true,
+  "allow_history_for_client": true,
+  "allow_publish_for_subscriber": true,
+  "allow_subscribe_for_anonymous": true,
+  "allow_publish_for_anonymous": true,
+  "allow_history_for_anonymous": true,
+  "history_size": 10,
+  "history_ttl": "300s",
+  "presence": true,
+  "join_leave": true,
+  "log_level" : "trace",
+  "allowed_origins": [
+    "*"
+  ],
+  "ping_interval": "25s",
+  "pong_timeout": "10s"
+}
