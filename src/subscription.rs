@@ -19,15 +19,18 @@ pub enum State {
     Subscribed,
 }
 
+#[derive(Debug, Clone)]
 pub struct SubscribedEvent {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
 pub struct SubscribingEvent {
     pub code: u32,
     pub reason: Cow<'static, str>,
 }
 
+#[derive(Debug, Clone)]
 pub struct UnsubscribedEvent {
     pub code: u32,
     pub reason: Cow<'static, str>,
