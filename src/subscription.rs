@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,12 +19,26 @@ pub enum State {
     Subscribed,
 }
 
+pub struct SubscribedEvent {
+    pub data: Vec<u8>,
+}
+
+pub struct SubscribingEvent {
+    pub code: u32,
+    pub reason: Cow<'static, str>,
+}
+
+pub struct UnsubscribedEvent {
+    pub code: u32,
+    pub reason: Cow<'static, str>,
+}
+
 pub(crate) struct SubscriptionInner {
     pub(crate) channel: Arc<str>,
     pub(crate) state: State,
-    on_subscribing: Option<Box<dyn FnMut() + Send + 'static>>,
-    on_subscribed: Option<Box<dyn FnMut() + Send + 'static>>,
-    on_unsubscribed: Option<Box<dyn FnMut() + Send + 'static>>,
+    on_subscribing: Option<Box<dyn FnMut(SubscribingEvent) + Send + 'static>>,
+    on_subscribed: Option<Box<dyn FnMut(SubscribedEvent) + Send + 'static>>,
+    on_unsubscribed: Option<Box<dyn FnMut(UnsubscribedEvent) + Send + 'static>>,
     pub(crate) on_publication: Option<Box<dyn FnMut(Publication) + Send + 'static>>,
     on_error: Option<Box<dyn FnMut(anyhow::Error) + Send + 'static>>,
     pub(crate) on_subscribed_ch: Vec<oneshot::Sender<Result<(), ()>>>,
@@ -49,44 +64,35 @@ impl SubscriptionInner {
         }
     }
 
-    pub fn move_to_subscribing(&mut self) {
+    pub fn move_to_subscribing(&mut self, code: u32, reason: Cow<'static, str>) {
         if self.pub_ch_write.is_none() {
             let (pub_ch_write, _) = MessageStore::new(self.read_timeout);
             self.pub_ch_write = Some(pub_ch_write);
         }
         self._set_state(State::Subscribing);
+        if let Some(ref mut on_subscribing) = self.on_subscribing {
+            on_subscribing(SubscribingEvent { code, reason });
+        }
     }
 
-    pub fn move_to_subscribed(&mut self) {
+    pub fn move_to_subscribed(&mut self, data: Vec<u8>) {
         self._set_state(State::Subscribed);
+        if let Some(ref mut on_subscribed) = self.on_subscribed {
+            on_subscribed(SubscribedEvent { data });
+        }
     }
 
-    pub fn move_to_unsubscribed(&mut self) {
+    pub fn move_to_unsubscribed(&mut self, code: u32, reason: Cow<'static, str>) {
         self.pub_ch_write = None;
         self._set_state(State::Unsubscribed);
+        if let Some(ref mut on_unsubscribed) = self.on_unsubscribed {
+            on_unsubscribed(UnsubscribedEvent { code, reason });
+        }
     }
 
     fn _set_state(&mut self, state: State) {
         log::debug!("state: {:?} -> {:?}, channel={}", self.state, state, self.channel);
         self.state = state;
-
-        match state {
-            State::Unsubscribed => {
-                if let Some(ref mut on_unsubscribed) = self.on_unsubscribed {
-                    on_unsubscribed();
-                }
-            }
-            State::Subscribing => {
-                if let Some(ref mut on_subscribing) = self.on_subscribing {
-                    on_subscribing();
-                }
-            }
-            State::Subscribed => {
-                if let Some(ref mut on_subscribed) = self.on_subscribed {
-                    on_subscribed();
-                }
-            }
-        }
     }
 }
 
@@ -112,7 +118,7 @@ impl Subscription {
                 let _ = tx.send(Err(()));
             } else {
                 sub.on_subscribed_ch.push(tx);
-                sub.move_to_subscribing();
+                sub.move_to_subscribing(0, "subscribe called".into());
                 if let Some(channel) = inner.sub_ch_write.as_ref() {
                     let _ = channel.send(self.id);
                 }
@@ -137,7 +143,7 @@ impl Subscription {
                 let _ = tx.send(());
             } else {
                 sub.on_unsubscribed_ch.push(tx);
-                sub.move_to_unsubscribed();
+                sub.move_to_unsubscribed(0, "unsubscribe called".into());
                 if let Some(channel) = inner.sub_ch_write.as_ref() {
                     let _ = channel.send(self.id);
                 }
@@ -192,21 +198,21 @@ impl Subscription {
         })
     }
 
-    pub fn on_subscribing(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_subscribing(&self, func: impl FnMut(SubscribingEvent) + Send + 'static) {
         let mut inner = self.client.0.lock().unwrap();
         if let Some(sub) = inner.subscriptions.get_mut(self.id) {
             sub.on_subscribing = Some(Box::new(func));
         }
     }
 
-    pub fn on_subscribed(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_subscribed(&self, func: impl FnMut(SubscribedEvent) + Send + 'static) {
         let mut inner = self.client.0.lock().unwrap();
         if let Some(sub) = inner.subscriptions.get_mut(self.id) {
             sub.on_subscribed = Some(Box::new(func));
         }
     }
 
-    pub fn on_unsubscribed(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_unsubscribed(&self, func: impl FnMut(UnsubscribedEvent) + Send + 'static) {
         let mut inner = self.client.0.lock().unwrap();
         if let Some(sub) = inner.subscriptions.get_mut(self.id) {
             sub.on_unsubscribed = Some(Box::new(func));

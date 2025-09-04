@@ -542,10 +542,17 @@ impl ClientInner {
                                     let result = rx.await;
                                     let mut inner = client.lock().unwrap();
                                     if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
-                                        let msg = if let Ok(Ok(Reply::Subscribe(_))) = result {
-                                            sub.move_to_subscribed();
+                                        let msg = if let Ok(Ok(Reply::Subscribe(sub_result))) = result {
+                                            sub.move_to_subscribed(sub_result.data);
                                             Ok(())
                                         } else {
+                                            let (code, reason) = match result {
+                                                Ok(Ok(Reply::Error(err))) => (err.code, err.message.into()),
+                                                Ok(Ok(_)) => (0, "unexpected reply".into()),
+                                                Ok(Err(err)) => (0, err.to_string().into()),
+                                                Err(err) => (0, err.to_string().into()),
+                                            };
+                                            sub.move_to_unsubscribed(code, reason);
                                             Err(())
                                         };
                                         for ch in sub.on_subscribed_ch.drain(..) {

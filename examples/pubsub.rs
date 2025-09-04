@@ -38,14 +38,14 @@ async fn main() {
     });
 
     let sub = client.new_subscription("news");
-    sub.on_subscribed(|| {
+    sub.on_subscribed(|_| {
         log::info!("subscribed to news");
     });
-    sub.on_unsubscribed(|| {
-        log::info!("unsubscribed from news");
+    sub.on_unsubscribed(|e| {
+        log::info!("unsubscribed from news (code={}, reason={})", e.code, e.reason);
     });
-    sub.on_subscribing(|| {
-        log::info!("subscribing to news");
+    sub.on_subscribing(|e| {
+        log::info!("subscribing to news (code={}, reason={})", e.code, e.reason);
     });
     sub.on_publication(|data| {
         let data: Message = serde_json::from_slice(&data.data).unwrap();
