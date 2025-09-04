@@ -17,9 +17,10 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
+use crate::events::{ConnectedEvent, ConnectingEvent, DisconnectedEvent};
 use crate::protocol::{
-    Command, ConnectRequest, PublishRequest, PushData, Reply, RpcRequest, SubscribeRequest,
-    UnsubscribeRequest,
+    Command, ConnectRequest, ConnectResult, PublishRequest, PushData, Reply, RpcRequest,
+    SubscribeRequest, UnsubscribeRequest,
 };
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
 use crate::{errors, subscription};
@@ -100,6 +101,7 @@ impl MessageStore {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) struct ClientInner {
     rt: Handle,
     url: Arc<str>,
@@ -111,10 +113,10 @@ pub(crate) struct ClientInner {
     reconnect_strategy: Arc<dyn ReconnectStrategy>,
     pub(crate) read_timeout: Duration,
     closer_write: Option<mpsc::Sender<bool>>,
-    on_connecting: Option<Box<dyn FnMut() + Send + 'static>>,
-    on_connected: Option<Box<dyn FnMut() + Send + 'static>>,
+    on_connecting: Option<Box<dyn FnMut(ConnectingEvent) + Send + 'static>>,
+    on_connected: Option<Box<dyn FnMut(ConnectedEvent) + Send + 'static>>,
     on_connected_ch: Vec<oneshot::Sender<Result<(), ()>>>,
-    on_disconnected: Option<Box<dyn FnMut() + Send + 'static>>,
+    on_disconnected: Option<Box<dyn FnMut(DisconnectedEvent) + Send + 'static>>,
     on_disconnected_ch: Vec<oneshot::Sender<()>>,
     on_error: Option<Box<dyn FnMut(anyhow::Error) + Send + 'static>>,
     pub(crate) subscriptions: SlotMap<SubscriptionId, SubscriptionInner>,
@@ -128,31 +130,50 @@ impl ClientInner {
     // Disconnected, Connected -> Connecting
     //  - from Disconnected: `.connect()` called
     //  - from Connected: temporary connection loss / reconnect advice
-    fn move_to_connecting(&mut self, outer: Arc<Mutex<Self>>) {
+    fn move_to_connecting(&mut self, outer: Arc<Mutex<Self>>, code: u32, reason: &str) {
         debug_assert_ne!(self.state, State::Connecting);
         if self.pub_ch_write.is_none() {
             let (pub_ch_write, _) = MessageStore::new(self.read_timeout);
             self.pub_ch_write = Some(pub_ch_write);
         }
         self._set_state(State::Connecting);
+        if let Some(ref mut on_connecting) = self.on_connecting {
+            on_connecting(ConnectingEvent {
+                code,
+                reason,
+            });
+        }
         self.start_connecting(outer);
     }
 
     // Connecting -> Connected
     //  - from Connecting: successful connect
-    fn move_to_connected(&mut self) {
+    fn move_to_connected(&mut self, client_id: &str, version: &str, data: Vec<u8>) {
         assert_eq!(self.state, State::Connecting);
         self._set_state(State::Connected);
+        if let Some(ref mut on_connected) = self.on_connected {
+            on_connected(ConnectedEvent {
+                client_id,
+                version,
+                data,
+            });
+        }
     }
 
     // Connecting, Connected -> Disconnected
     //  - from Connecting: `.disconnect()` called or terminal condition met
     //  - from Connected: `.disconnect()` called or terminal condition met
-    fn move_to_disconnected(&mut self) {
+    fn move_to_disconnected(&mut self, code: u32, reason: &str) {
         assert_ne!(self.state, State::Disconnected);
         self.closer_write = None;
         self.pub_ch_write = None;
         self._set_state(State::Disconnected);
+        if let Some(ref mut on_disconnected) = self.on_disconnected {
+            on_disconnected(DisconnectedEvent {
+                code,
+                reason,
+            });
+        }
     }
 
     fn do_check_state(client: &Arc<Mutex<Self>>, expected: State) -> Result<(), bool> {
@@ -253,6 +274,7 @@ impl ClientInner {
         closer_read: mpsc::Receiver<bool>,
         stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     ) -> impl Future<Output = Result<(
+        ConnectResult,
         Pin<Box<dyn Future<Output = bool> + Send>>,
         mpsc::Sender<(Command, oneshot::Sender<Result<Reply, ReplyError>>, Duration)>,
     ), bool>> + '_ {
@@ -327,8 +349,12 @@ impl ClientInner {
                             match reply {
                                 Reply::Connect(connect) => {
                                     // handshake completed
-                                    log::debug!("connection established with {} {}", connect.client, connect.version);
-                                    Ok((handler_future, control_write))
+                                    log::debug!("connection established with {} {}", &connect.client, &connect.version);
+                                    Ok((
+                                        connect,
+                                        handler_future,
+                                        control_write,
+                                    ))
                                 }
                                 Reply::Error(err) => {
                                     log::debug!("handshake failed: {}", &err.message);
@@ -382,7 +408,7 @@ impl ClientInner {
         let client1 = client.clone();
         let need_reconnect = async move {
             let mut reconnect_attempt = 0;
-            let (future, control_write) = loop {
+            let (connect_result, future, control_write) = loop {
                 let (closer_write, mut closer_read) = {
                     let mut inner = client.lock().unwrap();
                     let (closer_write, closer_read) = mpsc::channel::<bool>(1);
@@ -431,7 +457,7 @@ impl ClientInner {
             let (sub_ch_write, mut sub_ch_read) = mpsc::unbounded_channel();
             let rt = {
                 let mut inner = client.lock().unwrap();
-                inner.move_to_connected();
+                inner.move_to_connected(&connect_result.client, &connect_result.version, connect_result.data);
                 for (sub_id, sub) in inner.subscriptions.iter() {
                     if sub.state != subscription::State::Unsubscribed {
                         let _ = sub_ch_write.send(sub_id);
@@ -633,11 +659,11 @@ impl ClientInner {
             let mut inner = client1.lock().unwrap();
             if need_reconnect {
                 if inner.state == State::Connected {
-                    inner.move_to_connecting(client1.clone());
+                    inner.move_to_connecting(client1.clone(), 0, "");
                 }
             } else {
                 if inner.state == State::Connected {
-                    inner.move_to_disconnected();
+                    inner.move_to_disconnected(0, "");
                 }
                 for ch in inner.on_disconnected_ch.drain(..) {
                     let _ = ch.send(());
@@ -659,24 +685,6 @@ impl ClientInner {
     fn _set_state(&mut self, state: State) {
         log::debug!("state: {:?} -> {:?}", self.state, state);
         self.state = state;
-
-        match state {
-            State::Disconnected => {
-                if let Some(ref mut on_disconnected) = self.on_disconnected {
-                    on_disconnected();
-                }
-            }
-            State::Connecting => {
-                if let Some(ref mut on_connecting) = self.on_connecting {
-                    on_connecting();
-                }
-            }
-            State::Connected => {
-                if let Some(ref mut on_connected) = self.on_connected {
-                    on_connected();
-                }
-            }
-        }
     }
 }
 
@@ -757,7 +765,7 @@ impl Client {
         let mut inner = self.0.lock().unwrap();
         if inner.state == State::Disconnected {
             inner.on_connected_ch.push(tx);
-            inner.move_to_connecting(self.0.clone());
+            inner.move_to_connecting(self.0.clone(), 0, "connect called");
         } else {
             let _ = tx.send(Ok(()));
         }
@@ -775,7 +783,7 @@ impl Client {
         let mut inner = self.0.lock().unwrap();
         if inner.state != State::Disconnected {
             inner.on_disconnected_ch.push(tx);
-            inner.move_to_disconnected();
+            inner.move_to_disconnected(0, "disconnect called");
         } else {
             let _ = tx.send(());
         }
@@ -890,15 +898,15 @@ impl Client {
         }
     }
 
-    pub fn on_connecting(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_connecting(&self, func: impl FnMut(ConnectingEvent) + Send + 'static) {
         self.0.lock().unwrap().on_connecting = Some(Box::new(func));
     }
 
-    pub fn on_connected(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_connected(&self, func: impl FnMut(ConnectedEvent) + Send + 'static) {
         self.0.lock().unwrap().on_connected = Some(Box::new(func));
     }
 
-    pub fn on_disconnected(&self, func: impl FnMut() + Send + 'static) {
+    pub fn on_disconnected(&self, func: impl FnMut(DisconnectedEvent) + Send + 'static) {
         self.0.lock().unwrap().on_disconnected = Some(Box::new(func));
     }
 

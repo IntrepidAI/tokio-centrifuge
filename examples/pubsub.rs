@@ -24,17 +24,17 @@ async fn main() {
         Config::new().use_protobuf()
     );
 
-    client.on_connecting(|| {
+    client.on_connecting(|_e| {
         log::info!("connecting");
     });
-    client.on_connected(|| {
+    client.on_connected(|_e| {
         log::info!("connected");
     });
-    client.on_disconnected(|| {
+    client.on_disconnected(|_e| {
         log::info!("disconnected");
     });
     client.on_error(|err| {
-        log::info!("error: {:?}", err);
+        log::error!("error: {:?}", err);
     });
 
     let sub = client.new_subscription("news");

@@ -7,6 +7,7 @@ use tokio::sync::oneshot;
 
 use crate::client::{Client, FutureResult, MessageStore, RequestError};
 use crate::client_handler::ReplyError;
+use crate::events::{SubscribedEvent, SubscribingEvent, UnsubscribedEvent};
 use crate::protocol::{Command, Publication, PublishRequest, Reply};
 
 new_key_type! { pub(crate) struct SubscriptionId; }
@@ -16,26 +17,6 @@ pub enum State {
     Unsubscribed,
     Subscribing,
     Subscribed,
-}
-
-#[derive(Debug)]
-pub struct SubscribedEvent<'a> {
-    pub channel: &'a str,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub struct SubscribingEvent<'a> {
-    pub channel: &'a str,
-    pub code: u32,
-    pub reason: &'a str,
-}
-
-#[derive(Debug)]
-pub struct UnsubscribedEvent<'a> {
-    pub channel: &'a str,
-    pub code: u32,
-    pub reason: &'a str,
 }
 
 #[allow(clippy::type_complexity)]
