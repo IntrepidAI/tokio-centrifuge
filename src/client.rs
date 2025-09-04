@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::future::IntoFuture;
@@ -17,7 +18,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
 use crate::protocol::{
-    Command, ConnectRequest, PublishRequest, PushData, Reply, RpcRequest, SubscribeRequest, UnsubscribeRequest
+    Command, ConnectRequest, PublishRequest, PushData, Reply, RpcRequest, SubscribeRequest,
+    UnsubscribeRequest,
 };
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
 use crate::{errors, subscription};
@@ -546,13 +548,13 @@ impl ClientInner {
                                             sub.move_to_subscribed(sub_result.data);
                                             Ok(())
                                         } else {
-                                            let (code, reason) = match result {
+                                            let (code, reason): (u32, Cow<'static, str>) = match result {
                                                 Ok(Ok(Reply::Error(err))) => (err.code, err.message.into()),
                                                 Ok(Ok(_)) => (0, "unexpected reply".into()),
                                                 Ok(Err(err)) => (0, err.to_string().into()),
                                                 Err(err) => (0, err.to_string().into()),
                                             };
-                                            sub.move_to_unsubscribed(code, reason);
+                                            sub.move_to_unsubscribed(code, &reason);
                                             Err(())
                                         };
                                         for ch in sub.on_subscribed_ch.drain(..) {

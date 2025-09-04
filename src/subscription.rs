@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,23 +18,27 @@ pub enum State {
     Subscribed,
 }
 
-#[derive(Debug, Clone)]
-pub struct SubscribedEvent {
+#[derive(Debug)]
+pub struct SubscribedEvent<'a> {
+    pub channel: &'a str,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SubscribingEvent {
+#[derive(Debug)]
+pub struct SubscribingEvent<'a> {
+    pub channel: &'a str,
     pub code: u32,
-    pub reason: Cow<'static, str>,
+    pub reason: &'a str,
 }
 
-#[derive(Debug, Clone)]
-pub struct UnsubscribedEvent {
+#[derive(Debug)]
+pub struct UnsubscribedEvent<'a> {
+    pub channel: &'a str,
     pub code: u32,
-    pub reason: Cow<'static, str>,
+    pub reason: &'a str,
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) struct SubscriptionInner {
     pub(crate) channel: Arc<str>,
     pub(crate) state: State,
@@ -67,29 +70,29 @@ impl SubscriptionInner {
         }
     }
 
-    pub fn move_to_subscribing(&mut self, code: u32, reason: Cow<'static, str>) {
+    pub fn move_to_subscribing(&mut self, code: u32, reason: &str) {
         if self.pub_ch_write.is_none() {
             let (pub_ch_write, _) = MessageStore::new(self.read_timeout);
             self.pub_ch_write = Some(pub_ch_write);
         }
         self._set_state(State::Subscribing);
         if let Some(ref mut on_subscribing) = self.on_subscribing {
-            on_subscribing(SubscribingEvent { code, reason });
+            on_subscribing(SubscribingEvent { channel: &self.channel, code, reason });
         }
     }
 
     pub fn move_to_subscribed(&mut self, data: Vec<u8>) {
         self._set_state(State::Subscribed);
         if let Some(ref mut on_subscribed) = self.on_subscribed {
-            on_subscribed(SubscribedEvent { data });
+            on_subscribed(SubscribedEvent { channel: &self.channel, data });
         }
     }
 
-    pub fn move_to_unsubscribed(&mut self, code: u32, reason: Cow<'static, str>) {
+    pub fn move_to_unsubscribed(&mut self, code: u32, reason: &str) {
         self.pub_ch_write = None;
         self._set_state(State::Unsubscribed);
         if let Some(ref mut on_unsubscribed) = self.on_unsubscribed {
-            on_unsubscribed(UnsubscribedEvent { code, reason });
+            on_unsubscribed(UnsubscribedEvent { channel: &self.channel, code, reason });
         }
     }
 
@@ -121,7 +124,7 @@ impl Subscription {
                 let _ = tx.send(Err(()));
             } else {
                 sub.on_subscribed_ch.push(tx);
-                sub.move_to_subscribing(0, "subscribe called".into());
+                sub.move_to_subscribing(0, "subscribe called");
                 if let Some(channel) = inner.sub_ch_write.as_ref() {
                     let _ = channel.send(self.id);
                 }
@@ -146,7 +149,7 @@ impl Subscription {
                 let _ = tx.send(());
             } else {
                 sub.on_unsubscribed_ch.push(tx);
-                sub.move_to_unsubscribed(0, "unsubscribe called".into());
+                sub.move_to_unsubscribed(0, "unsubscribe called");
                 if let Some(channel) = inner.sub_ch_write.as_ref() {
                     let _ = channel.send(self.id);
                 }
