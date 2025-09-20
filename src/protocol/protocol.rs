@@ -212,6 +212,18 @@ pub struct Publication {
     #[prost(map = "string, string", tag = "7")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub tags: std::collections::HashMap<String, String>,
+    /// When set indicates that data in Publication is a delta from previous data.
+    #[prost(bool, tag = "8")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub delta: bool,
+    /// Optional time of publication as Unix timestamp milliseconds.
+    #[prost(int64, tag = "9")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub time: i64,
+    /// Optional channel name if Publication relates to wildcard subscription.
+    #[prost(string, tag = "10")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub channel: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]
@@ -305,6 +317,9 @@ pub struct Connect {
     #[prost(string, tag = "10")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub node: String,
+    /// Server time as Unix timestamp in milliseconds (not sent by default).
+    #[prost(int64, tag = "11")]
+    pub time: i64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]
@@ -351,6 +366,9 @@ pub struct ConnectRequest {
     #[prost(string, tag = "5")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub version: String,
+    #[prost(map = "string, string", tag = "6")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub headers: std::collections::HashMap<String, String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]
@@ -387,6 +405,10 @@ pub struct ConnectResult {
     #[prost(string, tag = "10")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub node: String,
+    /// Server time as Unix timestamp in milliseconds (not sent by default).
+    #[prost(int64, tag = "11")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub time: i64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]
@@ -445,6 +467,9 @@ pub struct SubscribeRequest {
     #[prost(bool, tag = "11")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub join_leave: bool,
+    #[prost(string, tag = "12")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub delta: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]
@@ -481,6 +506,9 @@ pub struct SubscribeResult {
     #[prost(bool, tag = "12")]
     #[serde(skip_serializing_if = "super::is_default")]
     pub was_recovering: bool,
+    #[prost(bool, tag = "13")]
+    #[serde(skip_serializing_if = "super::is_default")]
+    pub delta: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, prost::Message, Clone, PartialEq)]

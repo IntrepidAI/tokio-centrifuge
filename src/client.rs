@@ -292,6 +292,7 @@ impl ClientInner {
                 subs: std::collections::HashMap::new(),
                 name: inner.name.clone(),
                 version: inner.version.clone(),
+                headers: std::collections::HashMap::new(),
             });
             let timeout = inner.read_timeout;
 
@@ -721,7 +722,7 @@ where
 #[derive(Error, Debug)]
 pub enum RequestError {
     ErrorResponse(crate::protocol::Error),
-    UnexpectedReply(crate::protocol::Reply),
+    UnexpectedReply(Box<crate::protocol::Reply>),
     ReplyError(#[from] crate::client_handler::ReplyError),
     Timeout(#[from] tokio::time::error::Elapsed),
     Cancelled(#[from] tokio::sync::oneshot::error::RecvError),
@@ -834,7 +835,7 @@ impl Client {
                     Err(RequestError::ErrorResponse(err))
                 }
                 Ok(Ok(Ok(reply))) => {
-                    Err(RequestError::UnexpectedReply(reply))
+                    Err(RequestError::UnexpectedReply(Box::new(reply)))
                 }
                 Ok(Ok(Err(err))) => Err(err.into()),
                 Ok(Err(err)) => Err(err.into()),
@@ -871,7 +872,7 @@ impl Client {
                     Err(RequestError::ErrorResponse(err))
                 }
                 Ok(Ok(Ok(reply))) => {
-                    Err(RequestError::UnexpectedReply(reply))
+                    Err(RequestError::UnexpectedReply(Box::new(reply)))
                 }
                 Ok(Ok(Err(err))) => Err(err.into()),
                 Ok(Err(err)) => Err(err.into()),

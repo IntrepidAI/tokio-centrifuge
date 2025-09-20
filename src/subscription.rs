@@ -176,7 +176,7 @@ impl Subscription {
                     Err(RequestError::ErrorResponse(err))
                 }
                 Ok(Ok(Ok(reply))) => {
-                    Err(RequestError::UnexpectedReply(reply))
+                    Err(RequestError::UnexpectedReply(Box::new(reply)))
                 }
                 Ok(Ok(Err(err))) => Err(err.into()),
                 Ok(Err(err)) => Err(err.into()),
