@@ -19,7 +19,7 @@ use crate::client_handler::ReplyError;
 use crate::config::{Config, Protocol, ReconnectStrategy};
 use crate::events::{ConnectedEvent, ConnectingEvent, DisconnectedEvent};
 use crate::protocol::{
-    Command, ConnectRequest, ConnectResult, PublishRequest, PushData, Reply, RpcRequest,
+    Command, ConnectRequest, ConnectResult, PublishRequest, Push, PushData, Reply, RpcRequest,
     SubscribeRequest, UnsubscribeRequest,
 };
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
@@ -309,10 +309,10 @@ impl ClientInner {
             let client2 = client.clone();
             let mut handler_future: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(
                 crate::client_handler::websocket_handler(rt, stream, control_read, closer_read, protocol, move |push| {
-                    if let Reply::Push(push) = push {
-                        if let PushData::Publication(publication) = push.data {
+                    match push {
+                        Reply::Push(Push { channel, data: PushData::Publication(publication) }) => {
                             let mut inner = client1.lock().unwrap();
-                            if let Some(sub_id) = inner.sub_name_to_id.get(&push.channel).copied() {
+                            if let Some(sub_id) = inner.sub_name_to_id.get(&channel).copied() {
                                 if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
                                     if sub.state == subscription::State::Subscribed {
                                         if let Some(ref mut on_publication) = sub.on_publication {
@@ -322,8 +322,22 @@ impl ClientInner {
                                 }
                             }
                         }
-                    } else {
-                        log::debug!("unexpected push: {:?}", push);
+                        Reply::Push(Push { channel, data: PushData::Unsubscribe(unsubscribe) }) => {
+                            let mut inner = client1.lock().unwrap();
+                            let mut found = false;
+                            if let Some(sub_id) = inner.sub_name_to_id.get(&channel).copied() {
+                                if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
+                                    sub.move_to_unsubscribed(unsubscribe.code, &unsubscribe.reason);
+                                    found = true;
+                                }
+                            }
+                            if !found {
+                                log::debug!("unsubscribe for unknown channel: {}", channel);
+                            }
+                        }
+                        any => {
+                            log::debug!("unexpected push: {:?}", any);
+                        }
                     }
                 }, move |err| {
                     let mut inner = client2.lock().unwrap();
