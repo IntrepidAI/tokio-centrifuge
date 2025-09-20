@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};

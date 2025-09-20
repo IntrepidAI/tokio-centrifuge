@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::Future;
+use futures_util::Future;
 use slotmap::new_key_type;
 use tokio::sync::oneshot;
 

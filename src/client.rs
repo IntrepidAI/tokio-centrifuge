@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::Future;
+use futures_util::Future;
 use slotmap::SlotMap;
 use thiserror::Error;
 use tokio::net::TcpStream;

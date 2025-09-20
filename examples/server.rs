@@ -1,7 +1,7 @@
 use std::task::Poll;
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 use tokio::net::TcpListener;
 use tokio_centrifuge::errors::DisconnectErrorCode;
 use tokio_centrifuge::server::{ConnectContext, Server};
@@ -28,7 +28,7 @@ impl TestStream {
     }
 }
 
-impl futures::Stream for TestStream {
+impl futures_util::Stream for TestStream {
     type Item = TestStreamItem;
 
     fn poll_next(

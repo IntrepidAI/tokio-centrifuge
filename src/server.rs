@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::{Sink, SinkExt, Stream, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use matchit::{InsertError, Router};
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinSet};
