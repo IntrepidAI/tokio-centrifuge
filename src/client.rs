@@ -32,6 +32,16 @@ pub enum State {
     Connected,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct ServerInfo {
+    pub client_id: String,
+    pub server_version: String,
+    pub token_expires: bool,
+    pub token_ttl: u32,
+    pub server_ping: u32,
+    pub send_pong: bool,
+}
+
 pub(crate) struct MessageStoreItem {
     command: Command,
     reply: oneshot::Sender<Result<Reply, ReplyError>>,
@@ -124,6 +134,7 @@ pub(crate) struct ClientInner {
     pub(crate) pub_ch_write: Option<MessageStore>,
     pub(crate) sub_ch_write: Option<mpsc::UnboundedSender<SubscriptionId>>,
     active_tasks: usize,
+    server_info: ServerInfo,
 }
 
 impl ClientInner {
@@ -148,13 +159,13 @@ impl ClientInner {
 
     // Connecting -> Connected
     //  - from Connecting: successful connect
-    fn move_to_connected(&mut self, client_id: &str, version: &str, data: Vec<u8>) {
+    fn move_to_connected(&mut self, data: Vec<u8>) {
         assert_eq!(self.state, State::Connecting);
         self._set_state(State::Connected);
         if let Some(ref mut on_connected) = self.on_connected {
             on_connected(ConnectedEvent {
-                client_id,
-                version,
+                client_id: &self.server_info.client_id,
+                version: &self.server_info.server_version,
                 data,
             });
         }
@@ -472,7 +483,15 @@ impl ClientInner {
             let (sub_ch_write, mut sub_ch_read) = mpsc::unbounded_channel();
             let rt = {
                 let mut inner = client.lock().unwrap();
-                inner.move_to_connected(&connect_result.client, &connect_result.version, connect_result.data);
+                inner.server_info = ServerInfo {
+                    client_id: connect_result.client,
+                    server_version: connect_result.version,
+                    token_expires: connect_result.expires,
+                    token_ttl: connect_result.ttl,
+                    server_ping: connect_result.ping,
+                    send_pong: connect_result.pong,
+                };
+                inner.move_to_connected(connect_result.data);
                 for (sub_id, sub) in inner.subscriptions.iter() {
                     if sub.state != subscription::State::Unsubscribed {
                         let _ = sub_ch_write.send(sub_id);
@@ -769,7 +788,13 @@ impl Client {
             sub_ch_write: None,
             pub_ch_write: None,
             active_tasks: 0,
+            server_info: ServerInfo::default(),
         })))
+    }
+
+    pub fn server_info(&self) -> ServerInfo {
+        let inner = self.0.lock().unwrap();
+        inner.server_info.clone()
     }
 
     // future resolves when connection is established, with few caveats:
