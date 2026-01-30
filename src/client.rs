@@ -20,7 +20,7 @@ use crate::config::{Config, Protocol, ReconnectStrategy};
 use crate::events::{ConnectedEvent, ConnectingEvent, DisconnectedEvent};
 use crate::protocol::{
     Command, ConnectRequest, ConnectResult, PublishRequest, Push, PushData, Reply, RpcRequest,
-    SubscribeRequest, UnsubscribeRequest,
+    SubscribeRequest, UnsubscribeRequest, StreamPosition,
 };
 use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
 use crate::{errors, subscription};
@@ -327,8 +327,21 @@ impl ClientInner {
                             if let Some(sub_id) = inner.sub_name_to_id.get(&channel).copied() {
                                 if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
                                     if sub.state == subscription::State::Subscribed {
+                                        // Deliver publication
                                         if let Some(ref mut on_publication) = sub.on_publication {
-                                            on_publication(publication);
+                                            on_publication(publication.clone());
+                                        }
+
+                                        // Track stream position for recovery (offset is always the key)
+                                        if publication.offset > 0 {
+                                            // keep existing epoch if we have it; pubs may not carry epoch
+                                            let epoch = sub.stream_position.as_ref().map(|p| p.epoch.clone()).unwrap_or_default();
+                                            let new_pos = StreamPosition { epoch, offset: publication.offset };
+
+                                            match &sub.stream_position {
+                                                Some(old) if old.offset >= new_pos.offset => {}
+                                                _ => sub.stream_position = Some(new_pos),
+                                            }
                                         }
                                     }
                                 }
@@ -590,10 +603,22 @@ impl ClientInner {
                         if sub.state != subscription::State::Unsubscribed && !subscribed_channels.contains(&sub_id) {
                             // subscribe
                             let (tx, rx) = oneshot::channel();
-                            let command = Command::Subscribe(SubscribeRequest {
+                            let mut req = SubscribeRequest {
                                 channel: (*sub.channel).into(),
+                                positioned: true,
+                                recoverable: true,
                                 ..Default::default()
-                            });
+                            };
+
+                            if sub.recoverable && sub.positioned {
+                                if let Some(pos) = &sub.stream_position {
+                                    req.recover = true;
+                                    req.epoch = pos.epoch.clone();
+                                    req.offset = pos.offset;
+                                }
+                            }
+
+                            let command = Command::Subscribe(req);
                             let control_write = control_write1.clone();
                             subscribed_channels.insert(sub_id);
                             let client = client.clone();
@@ -605,8 +630,35 @@ impl ClientInner {
                                     let mut inner = client.lock().unwrap();
                                     if let Some(sub) = inner.subscriptions.get_mut(sub_id) {
                                         let msg = if let Ok(Ok(Reply::Subscribe(sub_result))) = result {
-                                            sub.move_to_subscribed(sub_result.data);
-                                            Ok(())
+
+                                                    // capture positioning + recoverability from server
+                                                    sub.recoverable = sub_result.recoverable;
+                                                    sub.positioned = sub_result.positioned;
+
+                                                    if sub_result.positioned {
+                                                        sub.stream_position = Some(StreamPosition {
+                                                            epoch: sub_result.epoch.clone(),
+                                                            offset: sub_result.offset,
+                                                        });
+                                                    }
+
+                                                    // If server replayed missed pubs as part of recovery, deliver them now
+                                                    if sub_result.recovered {
+                                                        for pub_ in sub_result.publications.iter() {
+                                                            if let Some(ref mut on_publication) = sub.on_publication {
+                                                                on_publication(pub_.clone());
+                                                            }
+                                                            if pub_.offset > 0 {
+                                                                sub.stream_position = Some(StreamPosition {
+                                                                    epoch: sub_result.epoch.clone(),
+                                                                    offset: pub_.offset,
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+
+                                                    sub.move_to_subscribed(sub_result.data);
+                                                    Ok(())
                                         } else {
                                             let (code, reason): (u32, Cow<'static, str>) = match result {
                                                 Ok(Ok(Reply::Error(err))) => (err.code, err.message.into()),
@@ -962,3 +1014,5 @@ impl Client {
         self.0.lock().unwrap().token = token.into();
     }
 }
+
+
