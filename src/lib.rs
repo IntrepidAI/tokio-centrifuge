@@ -11,3 +11,6 @@ pub mod utils;
 // Server::serve requires tungstenite::Message, so we should
 // re-export it to make sure user has the same version.
 pub use tokio_tungstenite::tungstenite;
+
+#[cfg(test)]
+mod tests;

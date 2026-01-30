@@ -51,8 +51,12 @@ async fn main() {
         let data: Message = serde_json::from_slice(&data.data).unwrap();
         log::info!("publication: {:?}", data);
     });
-    sub.subscribe();
 
+    // Note: tokio-centrifuge subscribes with `positioned` + `recoverable` enabled internally.
+    // This allows Centrifugo to attach offsets and enables automatic recovery on reconnect
+    // (when server history/recovery is enabled in centrifugo). So no need to set anything extra here.
+    sub.subscribe();
+    
     client.connect();
 
     for i in 0.. {

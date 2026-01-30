@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use crate::client::{Client, FutureResult, MessageStore, RequestError};
 use crate::client_handler::ReplyError;
 use crate::events::{SubscribedEvent, SubscribingEvent, UnsubscribedEvent};
-use crate::protocol::{Command, Publication, PublishRequest, Reply};
+use crate::protocol::{Command, Publication, PublishRequest, Reply, StreamPosition};
 
 new_key_type! { pub(crate) struct SubscriptionId; }
 
@@ -32,6 +32,9 @@ pub(crate) struct SubscriptionInner {
     pub(crate) on_unsubscribed_ch: Vec<oneshot::Sender<()>>,
     pub(crate) pub_ch_write: Option<MessageStore>,
     read_timeout: Duration,
+    pub(crate) stream_position: Option<StreamPosition>,
+    pub(crate) recoverable: bool,
+    pub(crate) positioned: bool,
 }
 
 impl SubscriptionInner {
@@ -48,6 +51,9 @@ impl SubscriptionInner {
             on_unsubscribed_ch: Vec::new(),
             pub_ch_write: None,
             read_timeout,
+            stream_position: None,
+            recoverable: false,
+            positioned: false,
         }
     }
 
