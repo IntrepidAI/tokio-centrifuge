@@ -14,6 +14,7 @@ pub struct Config {
 	pub token: String,
 	pub name: String,
 	pub version: String,
+	pub data: Vec<u8>,
 	pub protocol: Protocol,
 	pub runtime: Option<Handle>,
 	pub read_timeout: Duration,
@@ -26,6 +27,7 @@ impl Default for Config {
 			token: String::new(),
 			name: String::from(env!("CARGO_PKG_NAME")),
 			version: String::new(),
+			data: Vec::new(),
 			protocol: Protocol::Json,
 			runtime: None,
 			read_timeout: Duration::from_secs(5),
@@ -51,6 +53,11 @@ impl Config {
 
 	pub fn with_version(mut self, version: impl Into<String>) -> Self {
 		self.version = version.into();
+		self
+	}
+
+	pub fn with_data(mut self, data: impl Into<Vec<u8>>) -> Self {
+		self.data = data.into();
 		self
 	}
 

@@ -37,7 +37,7 @@ async fn main() {
         log::error!("error: {:?}", err);
     });
 
-    let sub = client.new_subscription("news");
+    let sub = client.new_subscription("news", Default::default());
     sub.on_subscribed(|e| {
         log::info!("subscribed to {}", e.channel);
     });

@@ -19,9 +19,32 @@ pub enum State {
     Subscribed,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct SubscriptionConfig {
+	pub token: String,
+	pub data: Vec<u8>,
+}
+
+impl SubscriptionConfig {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	pub fn with_token(mut self, token: impl Into<String>) -> Self {
+		self.token = token.into();
+		self
+	}
+
+	pub fn with_data(mut self, data: impl Into<Vec<u8>>) -> Self {
+		self.data = data.into();
+		self
+	}
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) struct SubscriptionInner {
     pub(crate) channel: Arc<str>,
+    pub(crate) config: SubscriptionConfig,
     pub(crate) state: State,
     on_subscribing: Option<Box<dyn FnMut(SubscribingEvent) + Send + 'static>>,
     on_subscribed: Option<Box<dyn FnMut(SubscribedEvent) + Send + 'static>>,
@@ -35,9 +58,10 @@ pub(crate) struct SubscriptionInner {
 }
 
 impl SubscriptionInner {
-    pub fn new(channel: &str, read_timeout: Duration) -> Self {
+    pub fn new(channel: &str, read_timeout: Duration, config: SubscriptionConfig) -> Self {
         SubscriptionInner {
             channel: channel.into(),
+            config,
             state: State::Unsubscribed,
             on_subscribing: None,
             on_subscribed: None,

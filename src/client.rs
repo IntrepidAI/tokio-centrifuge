@@ -22,7 +22,7 @@ use crate::protocol::{
     Command, ConnectRequest, ConnectResult, PublishRequest, Push, PushData, Reply, RpcRequest,
     SubscribeRequest, UnsubscribeRequest,
 };
-use crate::subscription::{Subscription, SubscriptionId, SubscriptionInner};
+use crate::subscription::{Subscription, SubscriptionConfig, SubscriptionId, SubscriptionInner};
 use crate::{errors, subscription};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +117,7 @@ pub(crate) struct ClientInner {
     url: Arc<str>,
     state: State,
     token: String,
+    data: Vec<u8>,
     name: String,
     version: String,
     protocol: Protocol,
@@ -299,7 +300,7 @@ impl ClientInner {
 
             let command = Command::Connect(ConnectRequest {
                 token: inner.token.clone(),
-                data: vec![],
+                data: inner.data.clone(),
                 subs: std::collections::HashMap::new(),
                 name: inner.name.clone(),
                 version: inner.version.clone(),
@@ -592,6 +593,8 @@ impl ClientInner {
                             let (tx, rx) = oneshot::channel();
                             let command = Command::Subscribe(SubscribeRequest {
                                 channel: (*sub.channel).into(),
+                                token: sub.config.token.clone(),
+                                data: sub.config.data.clone(),
                                 ..Default::default()
                             });
                             let control_write = control_write1.clone();
@@ -771,6 +774,7 @@ impl Client {
             url: url.into(),
             state: State::Disconnected,
             token: config.token,
+            data: config.data,
             name: config.name,
             version: config.version,
             protocol: config.protocol,
@@ -906,14 +910,14 @@ impl Client {
         })
     }
 
-    pub fn new_subscription(&self, channel: &str) -> Subscription {
+    pub fn new_subscription(&self, channel: &str, config: SubscriptionConfig) -> Subscription {
         let mut inner = self.0.lock().unwrap();
         if let Some(key) = inner.sub_name_to_id.get(channel) {
             return Subscription::new(self, *key);
         }
 
         let timeout = inner.read_timeout;
-        let key = inner.subscriptions.insert(SubscriptionInner::new(channel, timeout));
+        let key = inner.subscriptions.insert(SubscriptionInner::new(channel, timeout, config));
         inner.sub_name_to_id.insert(channel.to_string(), key);
         Subscription::new(self, key)
     }
